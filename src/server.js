@@ -10,7 +10,7 @@ const { Server } = require('socket.io');
 
 const repo = require('../db/repo');
 const { startRoute } = require('./simulate');
-const { geocodeSearch } = require('./routing');
+const { geocodeSearch, fetchRoadRoute } = require('./routing');
 const payments = require('./payments');
 const { issueToken, requireCustomerAuth, requireTechnicianAuth } = require('./clientAuth');
 
@@ -417,6 +417,26 @@ app.post('/api/technicians/:id/location', requireTechnicianAuth, async (req, res
     // map would look like a glitch, not a missing reading.
     heading: heading != null ? Number(heading) : (technician.heading ?? null),
   });
+
+  // The green route line on the map was computed ONCE, at the moment the
+  // job was assigned, from wherever the technician happened to be then —
+  // it never used to move after that. Now that the dot follows real GPS
+  // instead of walking that fixed line, the two would drift apart (the
+  // dot going wherever the technician actually drives, the line staying
+  // frozen at the original snapshot) unless the line is recomputed here
+  // too, on every real position update for whichever job is currently En
+  // Route. Only ever one such job at a time per technician in practice.
+  const activeJobs = await repo.jobs.listByTechnician(technician.id);
+  const enRouteJob = activeJobs.find((j) => j.status === 'En Route');
+  if (enRouteJob) {
+    const roadPath = await fetchRoadRoute(Number(latitude), Number(longitude), enRouteJob.latitude, enRouteJob.longitude);
+    const routePath = roadPath || [
+      [Number(latitude), Number(longitude)],
+      [enRouteJob.latitude, enRouteJob.longitude],
+    ];
+    await repo.jobs.setRoutePathAndEnRoute(enRouteJob.id, routePath);
+  }
+
   await broadcastState();
   res.json({ ok: true });
 });
