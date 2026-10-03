@@ -11,6 +11,7 @@ const { Server } = require('socket.io');
 const repo = require('../db/repo');
 const { startSimulation, stopSimulation } = require('./simulate');
 const { geocodeSearch } = require('./routing');
+const payments = require('./payments');
 
 const app = express();
 const server = http.createServer(app);
@@ -195,6 +196,70 @@ app.post('/api/tickets', async (req, res) => {
     id: `TKT-${Date.now()}`,
     subject: subject || serviceName,
     serviceName,
+    customerId: customerId || null,
+    customerName,
+    customerPhone,
+    chargerNickname,
+    latitude: Number(latitude),
+    longitude: Number(longitude),
+  });
+  await broadcastState();
+  res.status(201).json(ticket);
+});
+
+// --- Payments (Razorpay) ----------------------------------------------------
+// Replaces the old mock "Pay" button. The mobile app never tells us an
+// amount — it sends a serviceId, and src/payments.js looks up the real
+// price. A ticket is only ever created after the payment signature is
+// verified below; the old flow created the ticket on a local button tap
+// regardless of whether any money actually moved.
+
+// PUBLIC — step 1 of booking payment. Body: { serviceId }.
+app.post('/api/payments/order', async (req, res) => {
+  const { serviceId } = req.body || {};
+  try {
+    const order = await payments.createOrder({ serviceId });
+    res.json(order);
+  } catch (err) {
+    if (err.statusCode) {
+      // Razorpay's SDK throws errors shaped like { statusCode, error: { description } }
+      // for API-level failures (bad key, etc.) — surface the real reason
+      // rather than a blank body.
+      const detail = (err.error && err.error.description) || err.message || 'Payment order could not be created.';
+      console.error('Razorpay order creation failed:', detail);
+      return res.status(err.statusCode).json({ error: detail });
+    }
+    throw err; // unset RAZORPAY_KEY_ID/SECRET, or anything unexpected — let the centralized 500 handler log it
+  }
+});
+
+// PUBLIC — step 2, called after Razorpay's checkout reports success. Body:
+// { razorpay_order_id, razorpay_payment_id, razorpay_signature,
+//   customerId, customerName, customerPhone, chargerNickname, latitude,
+//   longitude, serviceId }. Only creates the ticket if the signature
+// actually verifies — this is the one place a real payment turns into a
+// real ticket.
+app.post('/api/payments/verify', async (req, res) => {
+  const {
+    razorpay_order_id, razorpay_payment_id, razorpay_signature,
+    customerId, customerName, customerPhone, chargerNickname, latitude, longitude, serviceId,
+  } = req.body || {};
+
+  if (!customerName || !customerPhone || !chargerNickname || latitude == null || longitude == null || !serviceId) {
+    return res.status(400).json({ error: 'customerName, customerPhone, chargerNickname, latitude, longitude and serviceId are required' });
+  }
+  const priced = payments.priceFor(serviceId);
+  if (!priced) return res.status(400).json({ error: `Unknown serviceId "${serviceId}"` });
+
+  const signatureOk = payments.verifySignature({ razorpay_order_id, razorpay_payment_id, razorpay_signature });
+  if (!signatureOk) {
+    return res.status(400).json({ error: 'Payment could not be verified. If money left your account, contact support — do not retry blindly.' });
+  }
+
+  const ticket = await repo.jobs.create({
+    id: `TKT-${Date.now()}`,
+    subject: priced.service.name,
+    serviceName: priced.service.name,
     customerId: customerId || null,
     customerName,
     customerPhone,
