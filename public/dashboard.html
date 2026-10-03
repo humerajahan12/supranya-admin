@@ -1,0 +1,2266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Supranya Admin — Dashboard</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root { --green: #1a6d26; --amber: #e59f14; --red: #d13438; --ink: #12241a; --page: #f4f7f5; --border: #e3e7e2; --muted: #5c6e62; --faint: #8a978d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: var(--page); color: var(--ink); }
+  header { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; background: #fff; border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 17px; margin: 0; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand img { width: 46px; height: 46px; border-radius: 50%; }
+  .tabs { display: flex; gap: 6px; }
+  .tabs button { border: 1px solid var(--border); background: #fff; border-radius: 999px; padding: 8px 16px; font-size: 12.5px; cursor: pointer; }
+  .tabs button.active { background: var(--green); color: #fff; border-color: var(--green); }
+  header .right { display: flex; gap: 10px; align-items: center; }
+  header .right button { border: 1px solid var(--border); background: #fff; border-radius: 999px; padding: 8px 16px; font-size: 12.5px; cursor: pointer; }
+  .body-area { height: calc(100vh - 57px); overflow-y: auto; }
+  .view { display: none; }
+  .view.active { display: block; }
+  #techsView.active { display: flex; } /* higher specificity than .layout below, so this only wins when the tab is actually active */
+  #customersView.active { display: flex; max-width: 1240px; margin: 0 auto; box-shadow: 0 0 0 1px var(--border); }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #d5dad6; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #b8c0ba; }
+  .layout { height: 100%; }
+  .panel { width: 420px; overflow-y: auto; padding: 20px; border-right: 1px solid var(--border); flex-shrink: 0; }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--faint); margin: 0 0 14px; }
+  #techMap { flex: 1; }
+  #jobsView.active { padding: 24px; max-width: 760px; margin: 0 auto; }
+
+  .job-card { background: #fff; border-radius: 14px; padding: 14px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(14,27,19,0.06); }
+  .job-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; gap: 8px; }
+  .job-subject { font-size: 14px; font-weight: 700; }
+  .job-meta { font-size: 11.5px; color: var(--faint); margin: 2px 0; }
+  .badge { font-family: monospace; font-size: 9.5px; padding: 3px 8px; border-radius: 999px; text-transform: uppercase; white-space: nowrap; }
+  .badge.Unassigned { background: #eee; color: var(--muted); }
+  .badge.Assigned { background: rgba(229,159,20,0.15); color: #8a5c0a; }
+  .badge.EnRoute { background: rgba(26,109,38,0.12); color: var(--green); }
+  .badge.Arrived { background: rgba(26,109,38,0.2); color: var(--green); }
+  .badge.Completed { background: #eee; color: var(--muted); }
+  .badge.delayed { background: #fdecea; color: var(--red); }
+  select, .assign-btn { width: 100%; margin-top: 10px; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border); font-size: 12.5px; }
+  .assign-btn { background: var(--green); color: #fff; border: none; font-weight: 700; cursor: pointer; }
+  .assign-btn:disabled { background: #cfd6d1; cursor: not-allowed; }
+  .job-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .job-actions select, .job-actions .assign-btn { margin-top: 0; }
+  .nav-btn { flex-shrink: 0; width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--border); background: #fff; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .nav-btn:hover { background: var(--page); }
+
+  .tech-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .dot.available { background: var(--green); }
+  .dot.on_job { background: var(--amber); }
+  .dot.offline { background: #ccc; }
+  .panel-head-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .add-tech-btn { border: 1px solid var(--green); background: #fff; color: var(--green); border-radius: 999px; padding: 6px 12px; font-size: 11.5px; font-weight: 700; cursor: pointer; }
+  .add-tech-btn:hover { background: rgba(26,109,38,0.06); }
+  .delete-tech-btn { border: none; background: none; color: var(--faint); font-size: 14px; cursor: pointer; padding: 4px; flex-shrink: 0; }
+  .delete-tech-btn:hover { color: var(--red); }
+
+  .customer-card { background: #fff; border-radius: 14px; padding: 14px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(14,27,19,0.06); }
+  .customer-name { font-size: 14px; font-weight: 700; }
+  .customer-phone { font-size: 11.5px; color: var(--faint); margin: 2px 0 10px; }
+  .device-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-top: 1px solid var(--border); font-size: 11.5px; }
+  .device-name { font-weight: 600; color: var(--ink); }
+  .device-meta { color: var(--faint); font-size: 10.5px; margin-top: 2px; }
+  .no-devices { font-size: 11px; color: var(--faint); font-style: italic; padding-top: 8px; }
+  .search-input { width: 100%; padding: 9px 12px; border-radius: 999px; border: 1px solid var(--border); font-size: 12.5px; margin-bottom: 14px; }
+  .pagination-row { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; font-size: 11.5px; color: var(--muted); }
+  .pagination-row button { border: 1px solid var(--border); background: #fff; border-radius: 999px; padding: 6px 12px; font-size: 11.5px; cursor: pointer; }
+  .pagination-row button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .status-badge { font-family: monospace; font-size: 9px; padding: 3px 8px; border-radius: 999px; text-transform: uppercase; }
+  .status-badge.active { background: rgba(26,109,38,0.1); color: var(--green); }
+  .status-badge.inactive { background: rgba(154,163,157,0.2); color: var(--muted); }
+  .status-badge.pending { background: rgba(229,159,20,0.15); color: #8a5c0a; }
+  .status-badge.approved { background: rgba(26,109,38,0.1); color: var(--green); }
+  .status-badge.rejected { background: #fdecea; color: var(--red); }
+  .grid-week-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .grid-nav-btn { border: 1px solid var(--border); background: #fff; border-radius: 999px; padding: 7px 14px; font-size: 12px; cursor: pointer; }
+  .grid-nav-btn:hover { background: var(--page); }
+  .grid-nav-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .grid-week-label { font-size: 13px; font-weight: 600; }
+  .grid-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+  .grid-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  .grid-table th, .grid-table td { padding: 10px 12px; text-align: center; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .grid-table th { background: var(--page); font-weight: 600; font-size: 11px; color: var(--muted); }
+  .grid-table td:first-child, .grid-table th:first-child { text-align: left; position: sticky; left: 0; background: #fff; font-weight: 600; z-index: 1; }
+  .grid-table th:first-child { background: var(--page); }
+  .grid-table tr:last-child td { border-bottom: none; }
+  .grid-cell-icon { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; font-size: 11px; font-weight: 700; }
+  .grid-present { background: rgba(26,109,38,0.12); color: var(--green); }
+  .grid-absent { background: #fdecea; color: var(--red); }
+  .grid-leave { background: rgba(229,159,20,0.18); color: #8a5c0a; }
+  .grid-leave-pending { background: #fff; color: #8a5c0a; border: 1.5px dashed var(--amber); }
+  .grid-off { background: rgba(154,163,157,0.15); color: var(--muted); }
+  .grid-legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 14px; font-size: 11px; color: var(--muted); }
+  .grid-legend-item { display: flex; align-items: center; gap: 6px; }
+  .att-mode-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
+  .att-mode-toggle { display: flex; gap: 4px; background: var(--page); border-radius: 999px; padding: 3px; }
+  .att-mode-btn { border: none; background: transparent; border-radius: 999px; padding: 7px 16px; font-size: 12.5px; font-weight: 600; cursor: pointer; color: var(--muted); }
+  .att-mode-btn.active { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .att-summary-card { display: flex; align-items: center; justify-content: space-between; gap: 20px; background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 20px; margin-bottom: 18px; flex-wrap: wrap; }
+  .att-stats-grid { display: flex; gap: 28px; flex-wrap: wrap; }
+  .att-stat .num { font-size: 22px; font-weight: 700; color: var(--ink); }
+  .att-stat .label { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .att-stat.up .num { color: var(--green); }
+  .att-stat.down .num { color: var(--red); }
+  .att-donut-wrap { display: flex; align-items: center; gap: 14px; }
+  .att-donut-legend { display: flex; flex-direction: column; gap: 6px; font-size: 11px; color: var(--muted); }
+  .att-donut-legend-item { display: flex; align-items: center; gap: 6px; }
+  .att-donut-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .att-date-picker { border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; font-size: 12px; background: #fff; color: var(--ink); margin-left: 4px; }
+  .att-mark-btn { border: 1px solid var(--border); background: #fff; border-radius: 999px; padding: 5px 12px; font-size: 11px; font-weight: 600; cursor: pointer; color: var(--green); white-space: nowrap; }
+  .att-mark-btn:hover { background: var(--page); }
+  .att-unmark-btn { color: var(--red); }
+  .customer-card { cursor: pointer; }
+  .customer-card.selected { outline: 2px solid var(--green); }
+  .right-pane { flex: 1; display: flex; overflow: hidden; }
+  #customerMap { flex: 1; }
+  .detail-panel { display: none; width: 420px; flex-shrink: 0; order: -1; background: var(--page); overflow-y: auto; padding: 24px; border-left: 1px solid var(--border); }
+  .detail-panel.active { display: block; }
+  .detail-panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+  .detail-avatar-row { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; }
+  .detail-avatar { width: 52px; height: 52px; border-radius: 50%; background: var(--green); color: #fff; font-size: 19px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .detail-name-row { display: flex; align-items: center; gap: 8px; }
+  .detail-name-row h3 { margin: 0; font-size: 17px; }
+  .detail-phone-line { font-size: 12.5px; color: var(--faint); margin-top: 3px; }
+  .detail-stat-row { display: flex; gap: 10px; margin-bottom: 20px; }
+  .detail-stat { flex: 1; background: #fff; border-radius: 12px; padding: 12px 14px; box-shadow: 0 2px 8px rgba(14,27,19,0.06); }
+  .detail-stat .num { font-size: 16px; font-weight: 700; color: var(--ink); }
+  .detail-stat .label { font-size: 10.5px; color: var(--faint); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .device-card { background: #fff; border-radius: 12px; padding: 14px; margin-bottom: 10px; box-shadow: 0 2px 8px rgba(14,27,19,0.06); display: flex; gap: 12px; align-items: flex-start; }
+  .device-card-icon { width: 38px; height: 38px; border-radius: 10px; background: var(--greenTint, rgba(26,109,38,0.1)); color: var(--green); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 16px; }
+  .device-card-name { font-size: 13px; font-weight: 600; color: var(--ink); }
+  .device-card-meta { font-size: 11px; color: var(--faint); margin-top: 3px; }
+  .device-card-coords { font-family: monospace; font-size: 10px; color: var(--faint); margin-top: 5px; }
+  .back-to-map-btn { border: 1px solid var(--border); background: #fff; border-radius: 999px; padding: 7px 14px; font-size: 12px; cursor: pointer; }
+  .detail-panel-card { background: #fff; border-radius: 14px; padding: 18px; max-width: 460px; box-shadow: 0 2px 8px rgba(14,27,19,0.06); }
+  .ticket-row { background: #fff; border-radius: 14px; padding: 14px; margin-bottom: 10px; box-shadow: 0 2px 8px rgba(14,27,19,0.06); cursor: pointer; }
+  .attendance-row { background: #fff; border-radius: 14px; padding: 14px; margin-bottom: 10px; box-shadow: 0 2px 8px rgba(14,27,19,0.06); display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .attendance-name { font-size: 13.5px; font-weight: 700; }
+  .attendance-times { font-size: 11.5px; color: var(--faint); margin-top: 3px; }
+  .attendance-duration { font-size: 11.5px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+  .checked-in-chip { display: inline-flex; align-items: center; gap: 6px; background: rgba(26,109,38,0.08); color: var(--green); border-radius: 999px; padding: 6px 12px; font-size: 11.5px; font-weight: 600; margin: 0 8px 8px 0; }
+  .checked-in-chip .dot { background: var(--green); }
+  .subtab-btn { border: 1px solid var(--border); background: #fff; border-radius: 999px; padding: 6px 14px; font-size: 11.5px; font-weight: 600; cursor: pointer; color: var(--muted); position: relative; }
+  .subtab-btn.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .subtab-badge { background: var(--red); color: #fff; font-size: 9.5px; font-weight: 700; border-radius: 999px; padding: 1px 6px; margin-left: 6px; }
+  .leave-row { background: #fff; border-radius: 14px; padding: 14px; margin-bottom: 10px; box-shadow: 0 2px 8px rgba(14,27,19,0.06); }
+  .leave-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .leave-reason { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .leave-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .leave-approve-btn { flex: 1; padding: 9px; border-radius: 999px; border: none; background: var(--green); color: #fff; font-weight: 700; font-size: 12px; cursor: pointer; }
+  .leave-reject-btn { flex: 1; padding: 9px; border-radius: 999px; border: 1px solid var(--red); background: #fff; color: var(--red); font-weight: 700; font-size: 12px; cursor: pointer; }
+  .detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  .detail-row:last-child { border-bottom: none; }
+  .detail-label { color: var(--faint); }
+  .detail-value { color: var(--ink); font-weight: 500; text-align: right; }
+  .toggle-status-btn { width: 100%; padding: 12px; border-radius: 999px; border: none; background: var(--ink); color: #fff; font-size: 12.5px; font-weight: 700; cursor: pointer; margin-top: 16px; }
+  .toggle-status-btn:hover { opacity: 0.9; }
+  .delete-customer-btn { width: 100%; padding: 12px; border-radius: 999px; border: 1px solid var(--red); background: #fff; color: var(--red); font-size: 12.5px; font-weight: 700; cursor: pointer; margin-top: 10px; }
+  .delete-customer-btn:hover { background: #fdecea; }
+  .date-filter-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  .date-filter-row select, .date-filter-row input[type="date"] { padding: 8px 12px; border-radius: 999px; border: 1px solid var(--border); font-size: 12px; }
+
+  /* Onboarding modal — same overlay pattern as the job-tracking modal */
+  #techModalOverlay { display: none; position: fixed; inset: 0; background: rgba(14,27,19,0.45); z-index: 5000; align-items: center; justify-content: center; }
+  #techModal { background: #fff; border-radius: 16px; width: 460px; max-width: 92vw; overflow: hidden; }
+  #detailModalOverlay { display: none; position: fixed; inset: 0; background: rgba(14,27,19,0.45); z-index: 5000; align-items: center; justify-content: center; }
+  #detailModal { background: #fff; border-radius: 16px; width: 460px; max-width: 92vw; max-height: 85vh; overflow-y: auto; }
+  .tech-modal-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+  .tech-modal-header h3 { margin: 0; font-size: 15px; }
+  .tech-modal-header button { border: none; background: none; font-size: 18px; cursor: pointer; color: var(--faint); }
+  .tech-modal-body { padding: 18px; }
+  .tech-modal-body label { font-size: 11.5px; font-weight: 600; color: var(--muted); display: block; margin-bottom: 6px; }
+  .tech-modal-body input { width: 100%; padding: 9px 12px; border-radius: 999px; border: 1px solid var(--border); font-size: 12.5px; margin-bottom: 14px; }
+  #onboardMap { height: 200px; border-radius: 10px; margin-bottom: 8px; }
+  #deviceLocModalOverlay { display: none; position: fixed; inset: 0; background: rgba(14,27,19,0.45); z-index: 5000; align-items: center; justify-content: center; }
+  #deviceLocModal { background: #fff; border-radius: 16px; width: 460px; max-width: 92vw; overflow: hidden; }
+  #deviceLocMap { height: 220px; border-radius: 10px; margin-bottom: 8px; }
+  #jobModalOverlay { display: none; position: fixed; inset: 0; background: rgba(14,27,19,0.45); z-index: 5000; align-items: center; justify-content: center; }
+  #jobModal { background: #fff; border-radius: 16px; width: 480px; max-width: 92vw; max-height: 88vh; overflow-y: auto; }
+  #jobMap { height: 190px; border-radius: 10px; margin-bottom: 8px; }
+  .job-modal-select { width: 100%; padding: 9px 12px; border-radius: 999px; border: 1px solid var(--border); font-size: 12.5px; margin-bottom: 14px; }
+  .job-customer-selected { font-size: 12.5px; background: var(--page); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .job-customer-selected .change-link { color: var(--green); font-weight: 700; cursor: pointer; font-size: 11.5px; white-space: nowrap; }
+  .location-search-wrap { position: relative; margin-bottom: 10px; }
+  .location-search-input { width: 100%; padding: 9px 12px; border-radius: 999px; border: 1px solid var(--border); font-size: 12.5px; }
+  .location-search-results { display: none; position: absolute; top: 42px; left: 0; right: 0; background: #fff; border-radius: 10px; box-shadow: 0 8px 24px rgba(14,27,19,0.18); max-height: 220px; overflow-y: auto; z-index: 2000; }
+  .location-search-results.active { display: block; }
+  .location-search-result { padding: 10px 12px; font-size: 12px; color: var(--ink); border-bottom: 1px solid var(--border); cursor: pointer; line-height: 1.4; }
+  .location-search-result:last-child { border-bottom: none; }
+  .location-search-result:hover { background: var(--page); }
+  .location-search-empty { padding: 10px 12px; font-size: 11.5px; color: var(--faint); }
+  .coord-hint { font-size: 10.5px; color: var(--faint); margin-bottom: 14px; }
+  .tech-modal-error { font-size: 11.5px; color: var(--red); margin-bottom: 12px; display: none; }
+  .tech-modal-save { width: 100%; padding: 11px; border-radius: 999px; border: none; background: var(--green); color: #fff; font-weight: 700; font-size: 13px; cursor: pointer; }
+
+  .sort-select { width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border); font-size: 12.5px; margin-bottom: 16px; }
+
+  .reports-wrap { padding: 24px; max-width: 920px; margin: 0 auto; }
+  .report-header-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
+  .generated-at { font-size: 11px; color: var(--faint); }
+  .export-btn { font-size: 12px; font-weight: 700; color: var(--green); border: 1px solid var(--green); border-radius: 999px; padding: 7px 14px; text-decoration: none; background: #fff; }
+  .export-btn:hover { background: rgba(26,109,38,0.06); }
+  .chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .chart-card { background: #fff; border-radius: 14px; padding: 16px; box-shadow: 0 2px 8px rgba(14,27,19,0.06); }
+  .chart-title { font-size: 11.5px; font-weight: 600; color: var(--muted); margin-bottom: 10px; }
+  .summary-cluster { margin-bottom: 20px; }
+  .cluster-label { font-size: 11px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; }
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 0; }
+  .summary-card { background: #fff; border-radius: 14px; padding: 16px; box-shadow: 0 2px 8px rgba(14,27,19,0.06); max-width: 220px; }
+  .summary-card .num { font-size: 22px; font-weight: 700; }
+  .summary-card .label { font-size: 11px; color: var(--faint); margin-top: 4px; }
+  .summary-card.warn .num { color: var(--red); }
+  .summary-card.good .num { color: var(--green); }
+  table.report { width: 100%; border-collapse: collapse; background: #fff; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 8px rgba(14,27,19,0.06); }
+  table.report th, table.report td { padding: 12px 14px; text-align: left; font-size: 12.5px; border-bottom: 1px solid var(--border); }
+  table.report th { color: var(--faint); font-weight: 600; text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.03em; }
+  table.report tr:last-child td { border-bottom: none; }
+
+  .bell-wrap { position: relative; }
+  #bellBtn { position: relative; border: 1px solid var(--border); background: #fff; border-radius: 999px; width: 38px; height: 38px; padding: 0; font-size: 16px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .bell-badge { position: absolute; top: -4px; right: -4px; background: var(--red); color: #fff; font-size: 10px; font-weight: 700; min-width: 17px; height: 17px; border-radius: 999px; display: flex; align-items: center; justify-content: center; padding: 0 4px; }
+  .bell-panel { position: absolute; top: 46px; right: 0; width: 320px; max-height: 400px; overflow-y: auto; background: #fff; border-radius: 12px; box-shadow: 0 8px 28px rgba(14,27,19,0.18); z-index: 50; }
+  .alert-item { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .alert-item:last-child { border-bottom: none; }
+  .alert-msg { font-size: 12.5px; color: var(--ink); line-height: 1.4; margin-bottom: 6px; }
+  .alert-time { font-size: 10.5px; color: var(--faint); }
+  .alert-dismiss { margin-top: 8px; font-size: 11px; border: 1px solid var(--border); background: #fff; border-radius: 999px; padding: 5px 10px; cursor: pointer; }
+  .alert-empty { padding: 20px; text-align: center; font-size: 12.5px; color: var(--faint); }
+
+  /* Per-job tracking modal */
+  #trackModalOverlay { display: none; position: fixed; inset: 0; background: rgba(14,27,19,0.45); z-index: 5000; align-items: center; justify-content: center; }
+  #trackModal { background: #fff; border-radius: 16px; width: 640px; max-width: 92vw; overflow: hidden; }
+  .track-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+  .track-header h3 { margin: 0; font-size: 15px; }
+  .track-header button { border: none; background: none; font-size: 18px; cursor: pointer; color: var(--faint); }
+  #trackMap { height: 320px; }
+  .track-info { padding: 16px 18px; display: flex; justify-content: space-between; align-items: center; }
+  .track-info .eta { font-size: 13.5px; font-weight: 700; }
+  .track-info .sub { font-size: 11.5px; color: var(--faint); margin-top: 3px; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <img src="/assets/logo.png" alt="Supranya" />
+      <h1>Supranya Admin</h1>
+    </div>
+    <div class="tabs">
+      <button id="tabJobs" class="active">Jobs</button>
+      <button id="tabTechs">Technicians</button>
+      <button id="tabCustomers">Customers</button>
+      <button id="tabTickets">Tickets</button>
+      <button id="tabAttendance">Attendance</button>
+      <button id="tabReports">Reports</button>
+    </div>
+    <div class="right">
+      <div class="bell-wrap">
+        <button id="bellBtn" title="Notifications">
+          🔔<span id="bellBadge" class="bell-badge" style="display:none;">0</span>
+        </button>
+        <div id="bellPanel" class="bell-panel" style="display:none;"></div>
+      </div>
+      <button id="logoutBtn">Log out</button>
+    </div>
+  </header>
+
+  <div class="body-area">
+    <!-- JOBS: list only, no persistent map. Each assigned job gets a
+         navigate arrow that opens the per-job tracking modal below. -->
+    <div id="jobsView" class="view active">
+      <div class="panel-head-row">
+        <h2 style="margin:0;">Jobs</h2>
+        <button id="addJobBtn" class="add-tech-btn">+ New Job</button>
+      </div>
+      <input id="jobSearch" class="search-input" placeholder="Search by ticket ID, subject, or customer…" />
+      <div id="jobList"></div>
+      <div class="pagination-row" id="jobPagination"></div>
+    </div>
+
+    <!-- TECHNICIANS: everyone's current location on one map, so admin can
+         see who's actually near an unassigned job before assigning. -->
+    <div id="techsView" class="view layout">
+      <div class="panel">
+        <div class="panel-head-row">
+          <h2 style="margin:0;">Technicians</h2>
+          <button id="addTechBtn" class="add-tech-btn">+ Add</button>
+        </div>
+        <select id="distanceJobSelect" class="sort-select">
+          <option value="">Sort by distance to…</option>
+        </select>
+        <input id="techSearch" class="search-input" placeholder="Search by name or phone…" />
+        <div id="techList"></div>
+        <div class="pagination-row" id="techPagination"></div>
+      </div>
+      <div id="techMap"></div>
+    </div>
+
+    <!-- CUSTOMERS: everyone registered via the mobile app, with their
+         registered devices and each device's pinned location. Paginated
+         and searchable — a real deployment has thousands of these. -->
+    <div id="customersView" class="view layout">
+      <div class="panel">
+        <h2>Customers</h2>
+        <input id="customerSearch" class="search-input" placeholder="Search by name or phone…" />
+        <div id="customerList"></div>
+        <div class="pagination-row" id="customerPagination"></div>
+      </div>
+      <div class="right-pane">
+        <div id="customerMap"></div>
+        <div id="customerDetailPanel" class="detail-panel"></div>
+      </div>
+    </div>
+
+    <!-- TICKETS: full searchable/paginated ticket history, independent of
+         the Jobs tab's assignment workflow. Click a row for full detail. -->
+    <div id="ticketsView" class="view">
+      <div style="padding:24px; max-width:760px; margin:0 auto;">
+        <h2>Tickets</h2>
+        <input id="ticketSearch" class="search-input" placeholder="Search by ticket ID, subject, or customer…" />
+        <div id="ticketList"></div>
+        <div class="pagination-row" id="ticketPagination"></div>
+      </div>
+    </div>
+
+    <!-- ATTENDANCE: who's checked in right now, plus the full check-in/
+         check-out log — marked from the technician's own app, timestamped
+         on the server so it can't be backdated from the phone. -->
+    <div id="attendanceView" class="view">
+      <div style="padding:24px; max-width:900px; margin:0 auto;">
+        <div class="panel-head-row">
+          <h2 style="margin:0;">Attendance</h2>
+          <div style="display:flex; gap:6px;">
+            <button id="attSubMain" class="subtab-btn active">Attendance</button>
+            <button id="attSubLeave" class="subtab-btn">Leave requests<span id="leavePendingBadge" class="subtab-badge" style="display:none;"></span></button>
+          </div>
+        </div>
+
+        <div id="attMainSection">
+          <div class="att-mode-row">
+            <div class="att-mode-toggle">
+              <button id="attModeDay" class="att-mode-btn active">Today</button>
+              <button id="attModeMonth" class="att-mode-btn">This Month</button>
+            </div>
+            <div class="grid-week-nav" id="attDayNav">
+              <button id="attPrevDay" class="grid-nav-btn">‹</button>
+              <div id="attDayLabel" class="grid-week-label"></div>
+              <button id="attNextDay" class="grid-nav-btn">›</button>
+              <input type="date" id="attDayPicker" class="att-date-picker" />
+            </div>
+            <div class="grid-week-nav" id="attMonthNav" style="display:none;">
+              <button id="attPrevMonth" class="grid-nav-btn">‹</button>
+              <div id="attMonthLabel" class="grid-week-label"></div>
+              <button id="attNextMonth" class="grid-nav-btn">›</button>
+            </div>
+          </div>
+
+          <div class="att-summary-card">
+            <div class="att-stats-grid" id="attStatsGrid"></div>
+            <div class="att-donut-wrap">
+              <canvas id="attDonutChart" width="110" height="110"></canvas>
+              <div class="att-donut-legend" id="attDonutLegend"></div>
+            </div>
+          </div>
+
+          <div id="attDayList"></div>
+
+          <div class="grid-table-wrap" id="attMonthTableWrap" style="display:none;">
+            <table class="grid-table" id="attMonthTable"></table>
+          </div>
+        </div>
+
+        <div id="attLeaveSection" style="display:none;">
+          <div class="date-filter-row">
+            <select id="leaveStatusFilter" class="sort-select" style="width:auto; margin:0;">
+              <option value="">All statuses</option>
+              <option value="pending" selected>Pending</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+            </select>
+            <input id="leaveSearch" class="search-input" style="flex:1; margin:0;" placeholder="Search by technician name…" />
+          </div>
+          <div id="leaveList"></div>
+          <div class="pagination-row" id="leavePagination"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- REPORTS -->
+    <div id="reportsView" class="view">
+      <div class="reports-wrap">
+        <div class="report-header-row">
+          <h2 style="margin:0;">Fleet summary</h2>
+          <div style="display:flex; align-items:center; gap:14px;">
+            <span class="generated-at" id="generatedAt"></span>
+            <a id="exportCsvBtn" class="export-btn" href="/api/reports/export">⬇ Export CSV</a>
+          </div>
+        </div>
+
+        <div class="date-filter-row">
+          <select id="rangePreset">
+            <option value="all">All time</option>
+            <option value="this_month">This month</option>
+            <option value="last_month">Last month</option>
+            <option value="last_quarter">Last quarter</option>
+            <option value="custom">Custom range…</option>
+          </select>
+          <input type="date" id="rangeFrom" style="display:none;" />
+          <span id="rangeToLabel" style="display:none; font-size:12px; color:var(--faint);">to</span>
+          <input type="date" id="rangeTo" style="display:none;" />
+        </div>
+
+        <!-- Grouped into Volume / Quality & SLA / Capacity instead of one
+             flat grid of 8 numbers — the same data, but readable as a
+             story instead of requiring the reader to sort it themselves. -->
+        <div class="summary-cluster">
+          <div class="cluster-label">Volume</div>
+          <div class="summary-grid" id="summaryGridVolume"></div>
+        </div>
+        <div class="summary-cluster">
+          <div class="cluster-label">Quality &amp; SLA</div>
+          <div class="summary-grid" id="summaryGridQuality"></div>
+        </div>
+        <div class="summary-cluster">
+          <div class="cluster-label">Capacity</div>
+          <div class="summary-grid" id="summaryGridCapacity"></div>
+        </div>
+
+        <h2>Performance dashboard</h2>
+        <div class="chart-grid">
+          <div class="chart-card">
+            <div class="chart-title">Top 10 by jobs completed</div>
+            <canvas id="completedChart" height="180"></canvas>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Top 10 fastest avg response (min)</div>
+            <canvas id="responseChart" height="180"></canvas>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">On-time vs delayed (fleet-wide)</div>
+            <canvas id="slaChart" height="180"></canvas>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Service type split</div>
+            <canvas id="serviceChart" height="180"></canvas>
+          </div>
+        </div>
+
+        <h2>Jobs handled per technician</h2>
+        <input id="techReportSearch" class="search-input" placeholder="Search technician…" />
+        <table class="report">
+          <thead>
+            <tr>
+              <th data-sort="name" data-label="Technician" onclick="sortTechnicianReport('name')" style="cursor:pointer;">Technician</th>
+              <th>Status</th>
+              <th data-sort="completed" data-label="Completed" onclick="sortTechnicianReport('completed')" style="cursor:pointer;">Completed</th>
+              <th data-sort="active" data-label="Active" onclick="sortTechnicianReport('active')" style="cursor:pointer;">Active</th>
+              <th data-sort="delayed" data-label="Delayed" onclick="sortTechnicianReport('delayed')" style="cursor:pointer;">Delayed</th>
+              <th data-sort="avgResponseMinutes" data-label="Avg response" onclick="sortTechnicianReport('avgResponseMinutes')" style="cursor:pointer;">Avg response</th>
+            </tr>
+          </thead>
+          <tbody id="reportBody"></tbody>
+        </table>
+        <div class="pagination-row" id="techReportPagination"></div>
+
+        <!-- Attendance reporting — uses the same date-range picker above
+             (this month / last month / last quarter / custom), plus its
+             own daily/weekly/monthly grouping for the chart and table. -->
+        <div class="report-header-row" style="margin-top:32px;">
+          <h2 style="margin:0;">Attendance</h2>
+          <select id="attendanceGroupBy" class="sort-select" style="width:auto; margin:0;">
+            <option value="day">Daily</option>
+            <option value="week">Weekly</option>
+            <option value="month">Monthly</option>
+          </select>
+        </div>
+
+        <div class="summary-grid" id="attendanceSummaryGrid" style="margin-bottom:20px;"></div>
+
+        <div class="chart-card" style="margin-bottom:20px;">
+          <div class="chart-title" id="attendanceChartTitle">Days present over time</div>
+          <canvas id="attendanceTrendChart" height="90"></canvas>
+        </div>
+
+        <table class="report">
+          <thead>
+            <tr>
+              <th>Technician</th>
+              <th>Days present</th>
+            </tr>
+          </thead>
+          <tbody id="attendanceReportBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Per-job live tracking modal -->
+  <div id="trackModalOverlay">
+    <div id="trackModal">
+      <div class="track-header">
+        <h3 id="trackTitle">Tracking job</h3>
+        <button id="trackCloseBtn">✕</button>
+      </div>
+      <div id="trackMap"></div>
+      <div class="track-info">
+        <div>
+          <div class="eta" id="trackEta">—</div>
+          <div class="sub" id="trackSub">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Generic detail modal — reused for both customer and ticket details -->
+  <div id="detailModalOverlay">
+    <div id="detailModal">
+      <div class="tech-modal-header">
+        <h3 id="detailTitle">Details</h3>
+        <button id="detailCloseBtn">✕</button>
+      </div>
+      <div class="tech-modal-body" id="detailBody"></div>
+    </div>
+  </div>
+
+  <!-- Onboard new technician modal — also reused for editing an existing
+       technician, including their location (e.g. correcting where they're
+       actually based). -->
+  <div id="techModalOverlay">
+    <div id="techModal">
+      <div class="tech-modal-header">
+        <h3 id="techModalTitle">Onboard a technician</h3>
+        <button id="techModalCloseBtn">✕</button>
+      </div>
+      <div class="tech-modal-body">
+        <div class="tech-modal-error" id="techModalError"></div>
+        <label for="techName">Name</label>
+        <input id="techName" placeholder="e.g. Kiran Babu" />
+        <label for="techPhone">Phone</label>
+        <input id="techPhone" placeholder="+91 90000 00000" />
+        <label for="techVehicle">Vehicle</label>
+        <input id="techVehicle" placeholder="e.g. Bike · TS 10 AB 1234" />
+        <div id="onboardLocationSection">
+          <label>Location</label>
+          <div class="location-search-wrap">
+            <input id="onboardLocationSearch" class="location-search-input" placeholder="Search for a place or address…" autocomplete="off" />
+            <div id="onboardLocationResults" class="location-search-results"></div>
+          </div>
+          <div id="onboardMap"></div>
+          <div class="coord-hint" id="onboardCoordHint">—</div>
+        </div>
+        <button class="tech-modal-save" id="techModalSaveBtn">Add technician</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Update a customer's device location -->
+  <div id="deviceLocModalOverlay">
+    <div id="deviceLocModal">
+      <div class="tech-modal-header">
+        <h3 id="deviceLocModalTitle">Update device location</h3>
+        <button id="deviceLocModalCloseBtn">✕</button>
+      </div>
+      <div class="tech-modal-body">
+        <div class="tech-modal-error" id="deviceLocModalError"></div>
+        <div class="location-search-wrap">
+          <input id="deviceLocationSearch" class="location-search-input" placeholder="Search for a place or address…" autocomplete="off" />
+          <div id="deviceLocationResults" class="location-search-results"></div>
+        </div>
+        <div id="deviceLocMap"></div>
+        <div class="coord-hint" id="deviceLocCoordHint">—</div>
+        <button class="tech-modal-save" id="deviceLocSaveBtn">Save location</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Admin-created job: create a ticket directly from the dashboard
+       (walk-in / phone-in / proactive visit), instead of only reacting to
+       ones the mobile app created. Can optionally assign it to a
+       technician right away, including a technician who already has other
+       active jobs — assigning several jobs to one technician is allowed
+       on purpose (a real technician works through a shift's worth of
+       tickets, not just one at a time). -->
+  <div id="jobModalOverlay">
+    <div id="jobModal">
+      <div class="tech-modal-header">
+        <h3>Create a job</h3>
+        <button id="jobModalCloseBtn">✕</button>
+      </div>
+      <div class="tech-modal-body">
+        <div class="tech-modal-error" id="jobModalError"></div>
+
+        <label for="jobCustomerSearch">Customer</label>
+        <div class="location-search-wrap">
+          <input id="jobCustomerSearch" class="location-search-input" placeholder="Search registered customers by name or phone…" autocomplete="off" />
+          <div id="jobCustomerResults" class="location-search-results"></div>
+        </div>
+        <div id="jobCustomerSelected" class="job-customer-selected" style="display:none;"></div>
+
+        <div id="jobDeviceWrap" style="display:none;">
+          <label for="jobDeviceSelect">Which of their chargers</label>
+          <select id="jobDeviceSelect" class="job-modal-select"></select>
+        </div>
+
+        <label for="jobChargerNickname">Charger / location label</label>
+        <input id="jobChargerNickname" placeholder="e.g. Home · Jubilee Hills" />
+
+        <label for="jobService">Service</label>
+        <select id="jobService" class="job-modal-select">
+          <option value="Annual Maintenance">Annual Maintenance</option>
+          <option value="Fault Diagnosis & Repair">Fault Diagnosis &amp; Repair</option>
+          <option value="__other">Other…</option>
+        </select>
+        <input id="jobServiceOther" placeholder="Describe the service" style="display:none;" />
+
+        <label for="jobSubject">Subject</label>
+        <input id="jobSubject" placeholder="e.g. No power to unit" />
+
+        <label>Job location</label>
+        <div class="location-search-wrap">
+          <input id="jobLocationSearch" class="location-search-input" placeholder="Search for a place or address…" autocomplete="off" />
+          <div id="jobLocationResults" class="location-search-results"></div>
+        </div>
+        <div id="jobMap"></div>
+        <div class="coord-hint" id="jobCoordHint">—</div>
+
+        <label for="jobTechSelect">Assign to (optional)</label>
+        <select id="jobTechSelect" class="job-modal-select">
+          <option value="">Leave unassigned</option>
+        </select>
+
+        <button class="tech-modal-save" id="jobModalSaveBtn">Create job</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    // Guard: bounce to login if there's no admin session.
+    fetch('/api/session').then(r => r.json()).then(d => {
+      if (!d.isAdmin) window.location.href = '/index.html';
+    });
+    document.getElementById('logoutBtn').onclick = async () => {
+      await fetch('/api/logout', { method: 'POST' });
+      window.location.href = '/index.html';
+    };
+
+    // --- Tabs -----------------------------------------------------------
+    const tabs = {
+      jobs: { btn: document.getElementById('tabJobs'), view: document.getElementById('jobsView') },
+      techs: { btn: document.getElementById('tabTechs'), view: document.getElementById('techsView') },
+      customers: { btn: document.getElementById('tabCustomers'), view: document.getElementById('customersView') },
+      tickets: { btn: document.getElementById('tabTickets'), view: document.getElementById('ticketsView') },
+      attendance: { btn: document.getElementById('tabAttendance'), view: document.getElementById('attendanceView') },
+      reports: { btn: document.getElementById('tabReports'), view: document.getElementById('reportsView') },
+    };
+    function showTab(name) {
+      Object.entries(tabs).forEach(([key, t]) => {
+        t.btn.classList.toggle('active', key === name);
+        t.view.classList.toggle('active', key === name);
+      });
+      if (name === 'techs') setTimeout(() => techMap.invalidateSize(), 50);
+      if (name === 'customers') { setTimeout(() => customerMap.invalidateSize(), 50); loadCustomers(); }
+      if (name === 'tickets') loadTickets();
+      if (name === 'attendance') {
+        loadAttendance();
+        loadLeave();
+      }
+      if (name === 'reports') loadReports();
+    }
+    tabs.jobs.btn.onclick = () => showTab('jobs');
+    tabs.techs.btn.onclick = () => showTab('techs');
+    tabs.customers.btn.onclick = () => showTab('customers');
+    tabs.tickets.btn.onclick = () => showTab('tickets');
+    tabs.attendance.btn.onclick = () => showTab('attendance');
+    tabs.reports.btn.onclick = () => showTab('reports');
+
+    // --- Notification bell -------------------------------------------------
+    const bellBtn = document.getElementById('bellBtn');
+    const bellBadge = document.getElementById('bellBadge');
+    const bellPanel = document.getElementById('bellPanel');
+    bellBtn.onclick = (e) => { e.stopPropagation(); bellPanel.style.display = bellPanel.style.display === 'none' ? 'block' : 'none'; };
+    document.addEventListener('click', (e) => { if (!bellPanel.contains(e.target) && e.target !== bellBtn) bellPanel.style.display = 'none'; });
+
+    function renderAlerts(alerts) {
+      const unread = alerts.filter(a => !a.acknowledged);
+      bellBadge.style.display = unread.length ? 'flex' : 'none';
+      bellBadge.textContent = unread.length;
+      if (!alerts.length) { bellPanel.innerHTML = '<div class="alert-empty">No delay alerts</div>'; return; }
+      bellPanel.innerHTML = alerts.map(a => `
+        <div class="alert-item" style="${a.acknowledged ? 'opacity:0.5;' : ''}">
+          <div class="alert-msg">${a.message}</div>
+          <div class="alert-time">${new Date(a.createdAt).toLocaleTimeString()}</div>
+          ${!a.acknowledged ? `<button class="alert-dismiss" onclick="ackAlert('${a.id}')">Dismiss</button>` : ''}
+        </div>`).join('');
+    }
+    async function ackAlert(id) { await fetch(`/api/alerts/${id}/ack`, { method: 'POST' }); }
+
+    // --- Shared helpers ------------------------------------------------------
+    function distanceKm(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+    // Real rider artwork on a translucent status-colored backdrop — the
+    // colored ring still communicates available/on-job/offline at a
+    // glance, the artwork itself replaces the emoji placeholder.
+    const bikeIcon = (status) => {
+      const bg = status === 'on_job' ? '#e59f14' : status === 'available' ? '#1a6d26' : '#9aa39d';
+      const pulse = status === 'on_job' ? 'box-shadow:0 0 0 4px rgba(229,159,20,0.25);' : '';
+      return L.divIcon({
+        className: '',
+        iconSize: [38, 38],
+        iconAnchor: [19, 19],
+        html: `<div style="width:38px;height:38px;border-radius:50%;background:${bg};opacity:0.9;${pulse}display:flex;align-items:center;justify-content:center;">
+                 <img src="/assets/rider.png" style="width:28px;height:auto;display:block;" />
+               </div>`,
+      });
+    };
+
+    // Real pin artwork, anchored at its bottom tip like an actual map pin
+    // (not a centered dot) so it points precisely at the coordinate.
+    const jobIcon = L.icon({
+      iconUrl: '/assets/charger-pin.png',
+      iconSize: [30, 35],
+      iconAnchor: [15, 35],
+      popupAnchor: [0, -32],
+    });
+
+    let latestState = { jobs: [], technicians: [], alerts: [] };
+
+    function render(state) {
+      latestState = state;
+      renderJobs(state.jobs, state.technicians);
+      renderTechnicians(state.technicians, state.jobs);
+      if (tabs.customers.view.classList.contains('active')) loadCustomers();
+      renderAlerts(state.alerts || []);
+      if (tabs.reports.view.classList.contains('active')) loadReports();
+      if (trackingJobId) updateTrackModal();
+    }
+
+    // --- JOBS tab (no persistent map — navigate arrow opens the modal) -----
+    // Selections the admin has made in a job's dropdown but not yet
+    // submitted via Assign. Without this, renderJobs() rebuilding the
+    // <select> on every socket "state" tick (which fires every 2s while
+    // any job is en route, not just for the job being edited) would reset
+    // an in-progress choice back to "Choose a technician…" before the
+    // admin got a chance to click Assign.
+    const pendingAssign = {};
+
+    // Job data is already streamed in full over the socket (needed for live
+    // tracking regardless), so search/pagination here are done client-side
+    // against that same stream rather than a separate paginated fetch —
+    // unlike Customers, there's no "thousands of rows sent every update"
+    // problem to avoid, since this data has to be live-pushed anyway.
+    let jobPageState = { page: 1, q: '' };
+    const JOB_PAGE_SIZE = 10;
+
+    function renderJobs(allJobs, technicians) {
+      const q = jobPageState.q.trim().toLowerCase();
+      const filtered = q
+        ? allJobs.filter(j => j.id.toLowerCase().includes(q) || j.subject.toLowerCase().includes(q) || j.customerName.toLowerCase().includes(q))
+        : allJobs;
+
+      const totalPages = Math.max(1, Math.ceil(filtered.length / JOB_PAGE_SIZE));
+      if (jobPageState.page > totalPages) jobPageState.page = totalPages;
+      const start = (jobPageState.page - 1) * JOB_PAGE_SIZE;
+      const pageJobs = filtered.slice(start, start + JOB_PAGE_SIZE);
+
+      const el = document.getElementById('jobList');
+      el.innerHTML = pageJobs.length ? pageJobs.map(job => {
+        const statusClass = job.status.replace(/\s/g, '');
+        const canAssign = job.status === 'Unassigned';
+        const canTrack = job.technicianId && job.status !== 'Completed';
+
+        // Every technician is a valid candidate, not just currently-available
+        // ones — a technician already on a job can still be handed another
+        // (real technicians work through several tickets in a shift). The
+        // active-job count is shown so the admin is choosing deliberately,
+        // not being surprised later by who's actually free.
+        const candidates = technicians
+          .map(t => ({
+            ...t,
+            km: distanceKm(t.latitude, t.longitude, job.latitude, job.longitude),
+            activeJobs: allJobs.filter(j => j.technicianId === t.id && j.status !== 'Completed').length,
+          }))
+          .sort((a, b) => a.km - b.km);
+        const selectedValue = job.technicianId || pendingAssign[job.id] || '';
+        const techOptions = candidates
+          .map(t => `<option value="${t.id}" ${t.id === selectedValue ? 'selected' : ''}>${t.name} · ${t.km.toFixed(1)} km away${t.activeJobs ? ` · ${t.activeJobs} active job${t.activeJobs > 1 ? 's' : ''}` : ' · free'}</option>`)
+          .join('');
+
+        return `
+          <div class="job-card">
+            <div class="job-top">
+              <span class="job-subject">${job.id} · ${job.subject}</span>
+              <span style="display:flex; gap:6px; align-items:center;">
+                ${job.delayAlerted && job.status !== 'Completed' ? '<span class="badge delayed">DELAYED</span>' : ''}
+                <span class="badge ${statusClass}">${job.status.toUpperCase()}</span>
+              </span>
+            </div>
+            <div class="job-meta">${job.serviceName}</div>
+            <div class="job-meta">${job.chargerNickname} · ${job.customerName}</div>
+            <div class="job-actions">
+              <select id="select-${job.id}" ${!canAssign ? 'disabled' : ''} onchange="pendingAssign['${job.id}']=this.value">
+                <option value="">Choose a technician…</option>
+                ${techOptions}
+              </select>
+              ${canAssign
+                ? `<button class="assign-btn" onclick="assign('${job.id}')">Assign</button>`
+                : canTrack
+                  ? `<button class="nav-btn" title="Track live location" onclick="openTrack('${job.id}')">🧭</button>`
+                  : `<button class="assign-btn" disabled>Completed</button>`}
+            </div>
+          </div>`;
+      }).join('') : '<div class="no-devices">No jobs match your search</div>';
+
+      renderPagination('jobPagination', filtered.length, jobPageState.page, JOB_PAGE_SIZE, (p) => { jobPageState.page = p; renderJobs(latestState.jobs, latestState.technicians); });
+    }
+
+    async function assign(jobId) {
+      const select = document.getElementById(`select-${jobId}`);
+      const technicianId = select.value;
+      if (!technicianId) { alert('Choose a technician first'); return; }
+      const res = await fetch(`/api/jobs/${jobId}/assign`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ technicianId }),
+      });
+      delete pendingAssign[jobId]; // job.technicianId (once set) takes over as the source of truth
+      if (!res.ok) alert('Could not assign job');
+    }
+
+    // --- Per-job tracking modal ---------------------------------------------
+    let trackMap, trackTechMarker, trackJobMarker, trackLine;
+    let trackingJobId = null;
+
+    function ensureTrackMap() {
+      if (trackMap) return;
+      trackMap = L.map('trackMap');
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors' }).addTo(trackMap);
+    }
+
+    function openTrack(jobId) {
+      trackingJobId = jobId;
+      trackBoundsFitted = false;
+      ensureTrackMap();
+      document.getElementById('trackModalOverlay').style.display = 'flex';
+      setTimeout(() => trackMap.invalidateSize(), 50);
+      updateTrackModal();
+    }
+
+    document.getElementById('trackCloseBtn').onclick = () => {
+      trackingJobId = null;
+      document.getElementById('trackModalOverlay').style.display = 'none';
+    };
+
+    // Rotates the rider marker's actual image (not the whole divIcon,
+    // which would also spin the status-colored circle behind it) via a
+    // direct DOM transform — far cheaper than calling setIcon() every tick.
+    function applyRiderRotation(marker, heading) {
+      const el = marker.getElement();
+      const img = el && el.querySelector('img');
+      if (img && heading != null) img.style.transform = `rotate(${heading}deg)`;
+    }
+
+    let trackBoundsFitted = false;
+
+    function updateTrackModal() {
+      const job = latestState.jobs.find(j => j.id === trackingJobId);
+      if (!job) { document.getElementById('trackCloseBtn').click(); return; }
+      const tech = latestState.technicians.find(t => t.id === job.technicianId);
+
+      document.getElementById('trackTitle').textContent = `${job.id} · ${job.subject}`;
+
+      const jobLatLng = [job.latitude, job.longitude];
+      if (!trackJobMarker) {
+        trackJobMarker = L.marker(jobLatLng, { icon: jobIcon }).addTo(trackMap).bindPopup(job.chargerNickname);
+      }
+
+      if (tech) {
+        const techLatLng = [tech.latitude, tech.longitude];
+        if (!trackTechMarker) {
+          trackTechMarker = L.marker(techLatLng, { icon: bikeIcon('on_job') }).addTo(trackMap).bindPopup(`${tech.name}<br/>${tech.vehicle}`);
+        } else {
+          trackTechMarker.setLatLng(techLatLng);
+        }
+        applyRiderRotation(trackTechMarker, tech.heading);
+
+        // Real road-following route once OSRM has responded (job.routePath);
+        // a straight line only ever appears as the brief "finding route"
+        // state or if routing genuinely failed — see simulate.js.
+        if (trackLine) trackMap.removeLayer(trackLine);
+        const routeLine = job.routePath && job.routePath.length > 1 ? job.routePath : [techLatLng, jobLatLng];
+        trackLine = L.polyline(routeLine, { color: '#1a6d26', weight: 4, opacity: 0.85 }).addTo(trackMap);
+
+        if (!trackBoundsFitted) {
+          trackMap.fitBounds(L.latLngBounds(routeLine), { padding: [40, 40] });
+          trackBoundsFitted = true;
+        }
+
+        const km = distanceKm(tech.latitude, tech.longitude, job.latitude, job.longitude);
+        document.getElementById('trackEta').textContent =
+          job.status === 'Arrived' ? `${tech.name} has arrived` : `${tech.name} · ${km.toFixed(1)} km away · ${job.status}`;
+        document.getElementById('trackSub').textContent = `${tech.vehicle} · heading to ${job.chargerNickname}`;
+      } else {
+        trackMap.setView(jobLatLng, 13);
+        document.getElementById('trackEta').textContent = 'No technician assigned';
+        document.getElementById('trackSub').textContent = job.chargerNickname;
+      }
+    }
+
+    // --- TECHNICIANS tab: everyone's location + distance-to-job sort -------
+    const techMap = L.map('techMap').setView([17.42, 78.42], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors' }).addTo(techMap);
+    const techMapMarkers = {};
+
+    const distanceJobSelect = document.getElementById('distanceJobSelect');
+    distanceJobSelect.onchange = () => renderTechnicians(latestState.technicians, latestState.jobs);
+
+    // Search/pagination for the list only — the map keeps showing every
+    // technician's live location regardless of which page the list is on,
+    // same principle as Jobs: this data is already streamed in full over
+    // the socket for tracking, so filtering/paging it here is just a view
+    // concern, not a "don't send everyone" concern like Customers.
+    let techPageState = { page: 1, q: '' };
+    const TECH_PAGE_SIZE = 15;
+
+    function renderTechnicians(technicians, jobs) {
+      // Keep the "sort by distance to" dropdown in sync with open jobs.
+      const openJobs = jobs.filter(j => j.status !== 'Completed');
+      const currentSelection = distanceJobSelect.value;
+      distanceJobSelect.innerHTML = '<option value="">Sort by distance to…</option>' +
+        openJobs.map(j => `<option value="${j.id}" ${j.id === currentSelection ? 'selected' : ''}>${j.id} · ${j.chargerNickname}</option>`).join('');
+
+      const refJob = openJobs.find(j => j.id === distanceJobSelect.value);
+      let list = technicians.map(t => ({ ...t }));
+      if (refJob) {
+        list.forEach(t => t.km = distanceKm(t.latitude, t.longitude, refJob.latitude, refJob.longitude));
+        list.sort((a, b) => a.km - b.km);
+      }
+
+      const q = techPageState.q.trim().toLowerCase();
+      const filtered = q ? list.filter(t => t.name.toLowerCase().includes(q) || t.phone.toLowerCase().includes(q)) : list;
+      const totalPages = Math.max(1, Math.ceil(filtered.length / TECH_PAGE_SIZE));
+      if (techPageState.page > totalPages) techPageState.page = totalPages;
+      const start = (techPageState.page - 1) * TECH_PAGE_SIZE;
+      const pageList = filtered.slice(start, start + TECH_PAGE_SIZE);
+
+      const el = document.getElementById('techList');
+      el.innerHTML = pageList.length ? pageList.map(t => `
+        <div class="tech-row">
+          <span class="dot ${t.status}"></span>
+          <div style="flex:1;">
+            <div>${t.name}</div>
+            <div style="color:var(--faint); font-size:11px;">${t.vehicle}</div>
+            <div style="color:var(--faint); font-size:11px;">${t.phone}</div>
+          </div>
+          <div style="color:var(--faint); font-size:11px; text-align:right;">
+            ${t.status.replace('_', ' ')}${refJob ? `<br/>${t.km.toFixed(1)} km` : ''}
+          </div>
+          <button class="delete-tech-btn" title="Edit technician" onclick="openTechEdit('${t.id}')">✎</button>
+          <button class="delete-tech-btn" title="Delete technician" onclick="deleteTechnician('${t.id}', '${t.name.replace(/'/g, "\\'")}')">🗑</button>
+        </div>`).join('') : '<div class="no-devices">No technicians match your search</div>';
+
+      renderPagination('techPagination', filtered.length, techPageState.page, TECH_PAGE_SIZE, (p) => { techPageState.page = p; renderTechnicians(latestState.technicians, latestState.jobs); });
+
+      // Every technician always has a live pin on this tab's map, regardless
+      // of status or which list page is showing — this is the "available
+      // technicians by location" view.
+      technicians.forEach(t => {
+        const icon = bikeIcon(t.status);
+        if (!techMapMarkers[t.id]) {
+          techMapMarkers[t.id] = L.marker([t.latitude, t.longitude], { icon }).addTo(techMap);
+        } else {
+          techMapMarkers[t.id].setLatLng([t.latitude, t.longitude]);
+          techMapMarkers[t.id].setIcon(icon); // rebuilds the DOM node, so rotation must be re-applied after
+        }
+        applyRiderRotation(techMapMarkers[t.id], t.status === 'on_job' ? t.heading : null);
+        techMapMarkers[t.id].bindPopup(`${t.name}<br/>${t.vehicle}<br/>${t.phone}<br/>${t.status.replace('_', ' ')}`);
+      });
+    }
+
+    // --- Delete technician ---------------------------------------------------
+    async function deleteTechnician(id, name) {
+      if (!confirm(`Delete ${name}? This can't be undone.`)) return;
+      const res = await fetch(`/api/technicians/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'Could not delete technician');
+      }
+    }
+
+    // --- Shared type-to-search location picker (Uber/Ola style) --------------
+    // Wired to any input + results-dropdown + Leaflet map/marker triple.
+    // Debounced so it doesn't hit /api/geocode on every keystroke.
+    function attachLocationSearch(inputEl, resultsEl, getMap, getMarker, onMove) {
+      let timer;
+      inputEl.addEventListener('input', () => {
+        clearTimeout(timer);
+        const q = inputEl.value.trim();
+        if (!q) { resultsEl.classList.remove('active'); resultsEl.innerHTML = ''; return; }
+        timer = setTimeout(async () => {
+          const res = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`);
+          const results = res.ok ? await res.json() : [];
+          resultsEl.innerHTML = results.length
+            ? results.map((r, i) => `<div class="location-search-result" onclick="window.__locSearchPick_${inputEl.id}(${i})">${r.label}</div>`).join('')
+            : '<div class="location-search-empty">No matches — try a different search, or drag the pin manually.</div>';
+          resultsEl.classList.add('active');
+          window[`__locSearchPick_${inputEl.id}`] = (i) => {
+            const r = results[i];
+            const map = getMap();
+            const marker = getMarker();
+            marker.setLatLng([r.latitude, r.longitude]);
+            map.setView([r.latitude, r.longitude], 15);
+            onMove();
+            inputEl.value = r.label;
+            resultsEl.classList.remove('active');
+          };
+        }, 400);
+      });
+      document.addEventListener('click', (e) => {
+        if (e.target !== inputEl && !resultsEl.contains(e.target)) resultsEl.classList.remove('active');
+      });
+    }
+
+    // --- Onboard / edit technician modal --------------------------------------
+    const techModalOverlay = document.getElementById('techModalOverlay');
+    const techModalError = document.getElementById('techModalError');
+    let onboardMap, onboardMarker;
+    const DEFAULT_ONBOARD_COORD = { latitude: 17.42, longitude: 78.42 }; // roughly central Hyderabad
+    let editingTechId = null; // null = onboarding a new technician; set = editing an existing one
+
+    attachLocationSearch(
+      document.getElementById('onboardLocationSearch'),
+      document.getElementById('onboardLocationResults'),
+      () => onboardMap,
+      () => onboardMarker,
+      updateOnboardCoordHint
+    );
+
+    document.getElementById('addTechBtn').onclick = () => {
+      editingTechId = null;
+      techModalError.style.display = 'none';
+      document.getElementById('techModalTitle').textContent = 'Onboard a technician';
+      document.getElementById('techModalSaveBtn').textContent = 'Add technician';
+      document.getElementById('onboardLocationSection').style.display = 'block';
+      document.getElementById('techName').value = '';
+      document.getElementById('techPhone').value = '';
+      document.getElementById('techVehicle').value = '';
+      document.getElementById('onboardLocationSearch').value = '';
+      techModalOverlay.style.display = 'flex';
+
+      if (!onboardMap) {
+        onboardMap = L.map('onboardMap').setView([DEFAULT_ONBOARD_COORD.latitude, DEFAULT_ONBOARD_COORD.longitude], 12);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors' }).addTo(onboardMap);
+        onboardMarker = L.marker([DEFAULT_ONBOARD_COORD.latitude, DEFAULT_ONBOARD_COORD.longitude], { draggable: true }).addTo(onboardMap);
+        onboardMarker.on('drag', updateOnboardCoordHint);
+      } else {
+        onboardMarker.setLatLng([DEFAULT_ONBOARD_COORD.latitude, DEFAULT_ONBOARD_COORD.longitude]);
+      }
+      updateOnboardCoordHint();
+      setTimeout(() => onboardMap.invalidateSize(), 50);
+    };
+
+    // Editing an existing technician reuses the same modal, pre-filled
+    // with their current details and current map position.
+    function openTechEdit(id) {
+      const t = latestState.technicians.find(x => x.id === id);
+      if (!t) return;
+      editingTechId = id;
+      techModalError.style.display = 'none';
+      document.getElementById('techModalTitle').textContent = 'Edit technician';
+      document.getElementById('techModalSaveBtn').textContent = 'Save changes';
+      document.getElementById('onboardLocationSection').style.display = 'block';
+      document.getElementById('techName').value = t.name;
+      document.getElementById('techPhone').value = t.phone;
+      document.getElementById('techVehicle').value = t.vehicle;
+      document.getElementById('onboardLocationSearch').value = '';
+      techModalOverlay.style.display = 'flex';
+
+      if (!onboardMap) {
+        onboardMap = L.map('onboardMap').setView([t.latitude, t.longitude], 14);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors' }).addTo(onboardMap);
+        onboardMarker = L.marker([t.latitude, t.longitude], { draggable: true }).addTo(onboardMap);
+        onboardMarker.on('drag', updateOnboardCoordHint);
+      } else {
+        onboardMarker.setLatLng([t.latitude, t.longitude]);
+        onboardMap.setView([t.latitude, t.longitude], 14);
+      }
+      updateOnboardCoordHint();
+      setTimeout(() => onboardMap.invalidateSize(), 50);
+    }
+
+    function updateOnboardCoordHint() {
+      const { lat, lng } = onboardMarker.getLatLng();
+      document.getElementById('onboardCoordHint').textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    }
+
+    document.getElementById('techModalCloseBtn').onclick = () => { techModalOverlay.style.display = 'none'; };
+
+    document.getElementById('techModalSaveBtn').onclick = async () => {
+      const name = document.getElementById('techName').value.trim();
+      const phone = document.getElementById('techPhone').value.trim();
+      const vehicle = document.getElementById('techVehicle').value.trim();
+      if (!name || !phone || !vehicle) {
+        techModalError.textContent = 'All fields are required.';
+        techModalError.style.display = 'block';
+        return;
+      }
+
+      let res;
+      const { lat, lng } = onboardMarker.getLatLng();
+      if (editingTechId) {
+        res = await fetch(`/api/technicians/${editingTechId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, phone, vehicle, latitude: lat, longitude: lng }),
+        });
+      } else {
+        res = await fetch('/api/technicians', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, phone, vehicle, latitude: lat, longitude: lng }),
+        });
+      }
+
+      if (res.ok) {
+        techModalOverlay.style.display = 'none';
+      } else {
+        const data = await res.json().catch(() => ({}));
+        techModalError.textContent = data.error || 'Could not save technician.';
+        techModalError.style.display = 'block';
+      }
+    };
+
+    // --- Create a job (admin-side) ---------------------------------------------
+    const jobModalOverlay = document.getElementById('jobModalOverlay');
+    const jobModalError = document.getElementById('jobModalError');
+    let jobMap, jobMarker;
+    const DEFAULT_JOB_COORD = { latitude: 17.42, longitude: 78.42 }; // roughly central Hyderabad
+    let jobSelectedCustomer = null; // { id, name, phone, devices } once picked from search
+
+    attachLocationSearch(
+      document.getElementById('jobLocationSearch'),
+      document.getElementById('jobLocationResults'),
+      () => jobMap,
+      () => jobMarker,
+      updateJobCoordHint
+    );
+
+    function updateJobCoordHint() {
+      const { lat, lng } = jobMarker.getLatLng();
+      document.getElementById('jobCoordHint').textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    }
+
+    function resetJobModal() {
+      jobModalError.style.display = 'none';
+      jobSelectedCustomer = null;
+      document.getElementById('jobCustomerSearch').value = '';
+      document.getElementById('jobCustomerSearch').style.display = 'block';
+      document.getElementById('jobCustomerResults').classList.remove('active');
+      document.getElementById('jobCustomerSelected').style.display = 'none';
+      document.getElementById('jobDeviceWrap').style.display = 'none';
+      document.getElementById('jobDeviceSelect').innerHTML = '';
+      document.getElementById('jobChargerNickname').value = '';
+      document.getElementById('jobService').value = 'Annual Maintenance';
+      document.getElementById('jobServiceOther').style.display = 'none';
+      document.getElementById('jobServiceOther').value = '';
+      document.getElementById('jobSubject').value = '';
+      document.getElementById('jobLocationSearch').value = '';
+      document.getElementById('jobTechSelect').innerHTML = '<option value="">Leave unassigned</option>';
+    }
+
+    document.getElementById('addJobBtn').onclick = () => {
+      resetJobModal();
+      jobModalOverlay.style.display = 'flex';
+
+      if (!jobMap) {
+        jobMap = L.map('jobMap').setView([DEFAULT_JOB_COORD.latitude, DEFAULT_JOB_COORD.longitude], 12);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors' }).addTo(jobMap);
+        jobMarker = L.marker([DEFAULT_JOB_COORD.latitude, DEFAULT_JOB_COORD.longitude], { draggable: true }).addTo(jobMap);
+        jobMarker.on('drag', updateJobCoordHint);
+      } else {
+        jobMarker.setLatLng([DEFAULT_JOB_COORD.latitude, DEFAULT_JOB_COORD.longitude]);
+        jobMap.setView([DEFAULT_JOB_COORD.latitude, DEFAULT_JOB_COORD.longitude], 12);
+      }
+      updateJobCoordHint();
+
+      // Every technician is selectable here too, sorted available-first —
+      // there's no job location yet to sort by distance until the pin is
+      // placed, so this just orders by who's free vs. already on something.
+      const sorted = [...latestState.technicians].sort((a, b) => {
+        if (a.status !== b.status) return a.status === 'available' ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      const techSelect = document.getElementById('jobTechSelect');
+      sorted.forEach(t => {
+        const activeJobs = latestState.jobs.filter(j => j.technicianId === t.id && j.status !== 'Completed').length;
+        const opt = document.createElement('option');
+        opt.value = t.id;
+        opt.textContent = `${t.name}${activeJobs ? ` · ${activeJobs} active job${activeJobs > 1 ? 's' : ''}` : ' · free'}`;
+        techSelect.appendChild(opt);
+      });
+
+      setTimeout(() => jobMap.invalidateSize(), 50);
+    };
+
+    document.getElementById('jobModalCloseBtn').onclick = () => { jobModalOverlay.style.display = 'none'; };
+
+    // --- Customer search inside the New Job modal ------------------------------
+    let jobCustomerSearchTimer;
+    document.getElementById('jobCustomerSearch').addEventListener('input', (e) => {
+      clearTimeout(jobCustomerSearchTimer);
+      const q = e.target.value.trim();
+      const resultsEl = document.getElementById('jobCustomerResults');
+      if (!q) { resultsEl.classList.remove('active'); resultsEl.innerHTML = ''; return; }
+      jobCustomerSearchTimer = setTimeout(async () => {
+        const res = await fetch(`/api/customers?q=${encodeURIComponent(q)}&pageSize=8`);
+        const data = res.ok ? await res.json() : { customers: [] };
+        const matches = data.customers || [];
+        resultsEl.innerHTML = matches.length
+          ? matches.map((c, i) => `<div class="location-search-result" onclick="window.__jobCustPick(${i})">${c.name} · ${c.phone}</div>`).join('')
+          : '<div class="location-search-empty">No matching customer — try Walk-in instead.</div>';
+        resultsEl.classList.add('active');
+        window.__jobCustPick = (i) => selectJobCustomer(matches[i]);
+      }, 400);
+    });
+    document.addEventListener('click', (e) => {
+      const input = document.getElementById('jobCustomerSearch');
+      const resultsEl = document.getElementById('jobCustomerResults');
+      if (e.target !== input && !resultsEl.contains(e.target)) resultsEl.classList.remove('active');
+    });
+
+    function selectJobCustomer(customer) {
+      jobSelectedCustomer = customer;
+      document.getElementById('jobCustomerSearch').style.display = 'none';
+      document.getElementById('jobCustomerResults').classList.remove('active');
+      const selectedEl = document.getElementById('jobCustomerSelected');
+      selectedEl.style.display = 'flex';
+      selectedEl.innerHTML = `<span>${customer.name} · ${customer.phone}</span><span class="change-link" onclick="clearJobCustomer()">Change</span>`;
+
+      const deviceWrap = document.getElementById('jobDeviceWrap');
+      const deviceSelect = document.getElementById('jobDeviceSelect');
+      if (customer.devices && customer.devices.length) {
+        deviceWrap.style.display = 'block';
+        deviceSelect.innerHTML = '<option value="">Choose a charger…</option>' +
+          customer.devices.map((d, i) => `<option value="${i}">${d.name}</option>`).join('');
+        deviceSelect.onchange = () => {
+          const d = customer.devices[deviceSelect.value];
+          if (!d) return;
+          document.getElementById('jobChargerNickname').value = d.name;
+          jobMarker.setLatLng([d.latitude, d.longitude]);
+          jobMap.setView([d.latitude, d.longitude], 15);
+          updateJobCoordHint();
+        };
+      } else {
+        deviceWrap.style.display = 'none';
+        deviceSelect.innerHTML = '';
+      }
+    }
+
+    function clearJobCustomer() {
+      jobSelectedCustomer = null;
+      document.getElementById('jobCustomerSearch').style.display = 'block';
+      document.getElementById('jobCustomerSearch').value = '';
+      document.getElementById('jobCustomerSelected').style.display = 'none';
+      document.getElementById('jobDeviceWrap').style.display = 'none';
+    }
+
+    document.getElementById('jobService').onchange = (e) => {
+      document.getElementById('jobServiceOther').style.display = e.target.value === '__other' ? 'block' : 'none';
+    };
+
+    document.getElementById('jobModalSaveBtn').onclick = async () => {
+      const chargerNickname = document.getElementById('jobChargerNickname').value.trim();
+      const subject = document.getElementById('jobSubject').value.trim();
+      const serviceSelect = document.getElementById('jobService').value;
+      const serviceName = serviceSelect === '__other' ? document.getElementById('jobServiceOther').value.trim() : serviceSelect;
+      const technicianId = document.getElementById('jobTechSelect').value;
+      const { lat, lng } = jobMarker.getLatLng();
+
+      if (!jobSelectedCustomer) {
+        jobModalError.textContent = 'Search for and select a registered customer first.';
+        jobModalError.style.display = 'block';
+        return;
+      }
+      const customerId = jobSelectedCustomer.id;
+      const customerName = jobSelectedCustomer.name;
+      const customerPhone = jobSelectedCustomer.phone;
+      if (!chargerNickname || !serviceName || !subject) {
+        jobModalError.textContent = 'Charger/location label, service, and subject are all required.';
+        jobModalError.style.display = 'block';
+        return;
+      }
+
+      const res = await fetch('/api/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId, customerName, customerPhone, chargerNickname, serviceName, subject,
+          latitude: lat, longitude: lng,
+          technicianId: technicianId || undefined,
+        }),
+      });
+
+      if (res.ok) {
+        jobModalOverlay.style.display = 'none';
+      } else {
+        const data = await res.json().catch(() => ({}));
+        jobModalError.textContent = data.error || 'Could not create job.';
+        jobModalError.style.display = 'block';
+      }
+    };
+
+    // --- Update a device's location -------------------------------------------
+    const deviceLocModalOverlay = document.getElementById('deviceLocModalOverlay');
+    const deviceLocModalError = document.getElementById('deviceLocModalError');
+    let deviceLocMap, deviceLocMarker;
+    let editingDevice = null; // { customerId, deviceId }
+
+    attachLocationSearch(
+      document.getElementById('deviceLocationSearch'),
+      document.getElementById('deviceLocationResults'),
+      () => deviceLocMap,
+      () => deviceLocMarker,
+      updateDeviceLocCoordHint
+    );
+
+    function openDeviceLocationEdit(customerId, deviceId) {
+      const customer = customerPageState.data.find(c => c.id === customerId);
+      const device = customer && customer.devices.find(d => d.id === deviceId);
+      if (!device) return;
+
+      editingDevice = { customerId, deviceId };
+      deviceLocModalError.style.display = 'none';
+      document.getElementById('deviceLocModalTitle').textContent = `Update location — ${device.name}`;
+      document.getElementById('deviceLocationSearch').value = '';
+      deviceLocModalOverlay.style.display = 'flex';
+
+      if (!deviceLocMap) {
+        deviceLocMap = L.map('deviceLocMap');
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors' }).addTo(deviceLocMap);
+        deviceLocMarker = L.marker([device.latitude, device.longitude], { draggable: true }).addTo(deviceLocMap);
+        deviceLocMarker.on('drag', updateDeviceLocCoordHint);
+      } else {
+        deviceLocMarker.setLatLng([device.latitude, device.longitude]);
+      }
+      deviceLocMap.setView([device.latitude, device.longitude], 15);
+      updateDeviceLocCoordHint();
+      setTimeout(() => deviceLocMap.invalidateSize(), 50);
+    }
+
+    function updateDeviceLocCoordHint() {
+      const { lat, lng } = deviceLocMarker.getLatLng();
+      document.getElementById('deviceLocCoordHint').textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    }
+
+    document.getElementById('deviceLocModalCloseBtn').onclick = () => { deviceLocModalOverlay.style.display = 'none'; };
+
+    document.getElementById('deviceLocSaveBtn').onclick = async () => {
+      if (!editingDevice) return;
+      const { lat, lng } = deviceLocMarker.getLatLng();
+      const res = await fetch(`/api/customers/${editingDevice.customerId}/devices/${editingDevice.deviceId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ latitude: lat, longitude: lng }),
+      });
+      if (res.ok) {
+        deviceLocModalOverlay.style.display = 'none';
+        await loadCustomers();
+        if (selectedCustomerIndex !== null) openCustomerDetail(selectedCustomerIndex); // refresh the open panel's device card
+      } else {
+        const data = await res.json().catch(() => ({}));
+        deviceLocModalError.textContent = data.error || 'Could not save location.';
+        deviceLocModalError.style.display = 'block';
+      }
+    };
+
+    // --- CUSTOMERS tab: paginated, searchable list + a map of the current
+    // page's device locations. With potentially thousands of customers,
+    // this fetches one page at a time from the server rather than holding
+    // everyone in the browser — the old version (kept in memory from the
+    // socket "state" event) worked fine for a handful of seed customers but
+    // would not scale to a real customer base. ------------------------------
+    const customerMap = L.map('customerMap').setView([17.42, 78.42], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors' }).addTo(customerMap);
+    let customerMapMarkers = [];
+    let customerPageState = { page: 1, q: '', data: [] };
+    const CUSTOMER_PAGE_SIZE = 20;
+
+    async function loadCustomers() {
+      const params = new URLSearchParams({ page: customerPageState.page, pageSize: CUSTOMER_PAGE_SIZE });
+      if (customerPageState.q) params.set('q', customerPageState.q);
+      const res = await fetch(`/api/customers?${params}`);
+      if (!res.ok) return;
+      const { customers, total, page, pageSize } = await res.json();
+      customerPageState.data = customers;
+      renderCustomerList(customers);
+      renderCustomerMap(customers);
+      renderPagination('customerPagination', total, page, pageSize, (p) => { closeCustomerDetail(); customerPageState.page = p; loadCustomers(); });
+
+      // Keep an open detail panel showing current data after a background
+      // refresh (e.g. a new device registering); close it if the selected
+      // customer fell off this page (their data no longer exists here).
+      if (selectedCustomerIndex !== null) {
+        if (selectedCustomerIndex < customers.length) openCustomerDetail(selectedCustomerIndex);
+        else closeCustomerDetail();
+      }
+    }
+
+    function renderCustomerList(customers) {
+      const el = document.getElementById('customerList');
+      el.innerHTML = customers.length
+        ? customers.map((c, i) => `
+          <div class="customer-card" onclick="openCustomerDetail(${i})">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+              <div style="flex:1;">
+                <div class="customer-name">${c.name} <span class="status-badge ${c.status}">${c.status}</span></div>
+                <div class="customer-phone">${c.phone}</div>
+              </div>
+              <button class="delete-tech-btn" title="Delete customer" onclick="event.stopPropagation(); deleteCustomer('${c.id}', '${c.name.replace(/'/g, "\\'")}')">🗑</button>
+            </div>
+            ${c.devices.length
+              ? `<div class="no-devices" style="font-style:normal;">${c.devices.length} device${c.devices.length > 1 ? 's' : ''} registered</div>`
+              : '<div class="no-devices">No devices registered yet</div>'}
+          </div>`).join('')
+        : '<div class="no-devices">No customers match your search</div>';
+    }
+
+    async function deleteCustomer(id, name) {
+      if (!confirm(`Delete ${name}? This can't be undone.`)) return;
+      const res = await fetch(`/api/customers/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        if (selectedCustomerIndex !== null) closeCustomerDetail();
+        loadCustomers();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'Could not delete customer');
+      }
+    }
+
+    function renderCustomerMap(customers) {
+      // Rebuilt from scratch on each page/search change — this only ever
+      // reflects the current page's customers, not the whole customer
+      // base, which keeps it fast regardless of total customer count.
+      customerMapMarkers.forEach(m => customerMap.removeLayer(m));
+      customerMapMarkers = [];
+      customers.forEach(c => {
+        c.devices.forEach(d => {
+          const marker = L.marker([d.latitude, d.longitude], { icon: jobIcon })
+            .addTo(customerMap)
+            .bindPopup(`${c.name}<br/>${d.name}<br/>${[d.brand, d.power].filter(Boolean).join(' · ')}`);
+          customerMapMarkers.push(marker);
+        });
+      });
+    }
+
+    // Scopes the map to just one customer's own chargers, used when their
+    // detail panel is open — the map shrinks to sit beside the panel, and
+    // shouldn't keep showing every other customer on the current page.
+    function renderCustomerMapForOne(customer) {
+      customerMapMarkers.forEach(m => customerMap.removeLayer(m));
+      customerMapMarkers = [];
+      if (!customer.devices.length) {
+        customerMap.setView([17.42, 78.42], 11);
+        return;
+      }
+      customer.devices.forEach(d => {
+        const marker = L.marker([d.latitude, d.longitude], { icon: jobIcon })
+          .addTo(customerMap)
+          .bindPopup(`${customer.name}<br/>${d.name}<br/>${[d.brand, d.power].filter(Boolean).join(' · ')}`);
+        customerMapMarkers.push(marker);
+      });
+      if (customer.devices.length === 1) {
+        customerMap.setView([customer.devices[0].latitude, customer.devices[0].longitude], 14);
+      } else {
+        customerMap.fitBounds(L.latLngBounds(customer.devices.map(d => [d.latitude, d.longitude])), { padding: [40, 40] });
+      }
+    }
+
+    let selectedCustomerIndex = null;
+
+    let customerEditMode = false;
+    let lastOpenedCustomerIndex = null;
+
+    function openCustomerDetail(index) {
+      if (index !== lastOpenedCustomerIndex) customerEditMode = false; // switching to a different customer always starts in view mode
+      lastOpenedCustomerIndex = index;
+      selectedCustomerIndex = index;
+      const c = customerPageState.data[index];
+
+      // Highlight the selected row so it's clear which card the panel belongs to.
+      document.querySelectorAll('#customerList .customer-card').forEach((el, i) => {
+        el.classList.toggle('selected', i === index);
+      });
+
+      const initial = c.name.trim().charAt(0).toUpperCase();
+
+      const headerAndIdentity = customerEditMode ? `
+        <div class="detail-panel-header">
+          <span style="font-size:12px; color:var(--faint); font-weight:600; text-transform:uppercase; letter-spacing:0.03em;">Edit customer</span>
+          <button class="back-to-map-btn" onclick="closeCustomerDetail()">← Back to map</button>
+        </div>
+        <div class="detail-avatar-row">
+          <div class="detail-avatar">${initial}</div>
+          <div style="flex:1;">
+            <label style="font-size:10.5px; color:var(--faint); display:block; margin-bottom:4px;">Name</label>
+            <input id="editCustName" class="search-input" style="margin-bottom:8px;" value="${c.name.replace(/"/g, '&quot;')}" />
+            <label style="font-size:10.5px; color:var(--faint); display:block; margin-bottom:4px;">Phone</label>
+            <input id="editCustPhone" class="search-input" style="margin-bottom:0;" value="${c.phone.replace(/"/g, '&quot;')}" />
+          </div>
+        </div>
+        <div style="display:flex; gap:8px; margin-bottom:20px;">
+          <button class="toggle-status-btn" style="margin-top:0;" onclick="saveCustomerEdit('${c.id}')">Save changes</button>
+          <button class="delete-customer-btn" style="margin-top:0;" onclick="customerEditMode=false; openCustomerDetail(${index});">Cancel</button>
+        </div>
+      ` : `
+        <div class="detail-panel-header">
+          <span style="font-size:12px; color:var(--faint); font-weight:600; text-transform:uppercase; letter-spacing:0.03em;">Customer</span>
+          <div style="display:flex; gap:8px;">
+            <button class="back-to-map-btn" onclick="customerEditMode=true; openCustomerDetail(${index});">✎ Edit</button>
+            <button class="back-to-map-btn" onclick="closeCustomerDetail()">← Back to map</button>
+          </div>
+        </div>
+        <div class="detail-avatar-row">
+          <div class="detail-avatar">${initial}</div>
+          <div>
+            <div class="detail-name-row">
+              <h3>${c.name}</h3>
+              <span class="status-badge ${c.status}">${c.status}</span>
+            </div>
+            <div class="detail-phone-line">${c.phone}</div>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('customerDetailPanel').innerHTML = `
+        ${headerAndIdentity}
+
+        <div class="detail-stat-row">
+          <div class="detail-stat"><div class="num">${c.devices.length}</div><div class="label">Devices</div></div>
+          <div class="detail-stat"><div class="num">${formatDate(c.registeredAt)}</div><div class="label">Registered</div></div>
+        </div>
+
+        ${c.devices.length ? c.devices.map(d => `
+          <div class="device-card">
+            <div class="device-card-icon">⚡</div>
+            <div style="flex:1;">
+              <div class="device-card-name">${d.name}</div>
+              <div class="device-card-meta">${[d.brand, d.power].filter(Boolean).join(' · ') || '—'}</div>
+              <div class="device-card-coords">${d.latitude.toFixed(4)}, ${d.longitude.toFixed(4)}</div>
+            </div>
+            <button class="delete-tech-btn" title="Update location" onclick="openDeviceLocationEdit('${c.id}', '${d.id}')">📍</button>
+          </div>`).join('') : '<div class="no-devices">No devices registered yet</div>'}
+
+        ${customerEditMode ? '' : `
+          <button class="toggle-status-btn" onclick="toggleCustomerStatus('${c.id}', '${c.status === 'active' ? 'inactive' : 'active'}')">
+            Mark as ${c.status === 'active' ? 'Inactive' : 'Active'}
+          </button>
+          <button class="delete-customer-btn" onclick="deleteCustomer('${c.id}', '${c.name.replace(/'/g, "\\'")}')">
+            Delete customer
+          </button>
+        `}
+      `;
+      document.getElementById('customerDetailPanel').classList.add('active');
+      renderCustomerMapForOne(c);
+      setTimeout(() => customerMap.invalidateSize(), 50); // map container's width just changed
+    }
+
+    async function saveCustomerEdit(id) {
+      const name = document.getElementById('editCustName').value.trim();
+      const phone = document.getElementById('editCustPhone').value.trim();
+      if (!name || !phone) { alert('Name and phone cannot be empty'); return; }
+      const res = await fetch(`/api/customers/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, phone }),
+      });
+      if (res.ok) {
+        customerEditMode = false;
+        await loadCustomers();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'Could not save changes');
+      }
+    }
+
+    function closeCustomerDetail() {
+      customerEditMode = false;
+      lastOpenedCustomerIndex = null;
+      selectedCustomerIndex = null;
+      document.getElementById('customerDetailPanel').classList.remove('active');
+      document.querySelectorAll('#customerList .customer-card').forEach(el => el.classList.remove('selected'));
+      renderCustomerMap(customerPageState.data); // restore the full current-page view
+      setTimeout(() => customerMap.invalidateSize(), 50);
+    }
+
+    async function toggleCustomerStatus(id, newStatus) {
+      const res = await fetch(`/api/customers/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      if (res.ok) {
+        closeCustomerDetail();
+        loadCustomers();
+      } else {
+        alert('Could not update status');
+      }
+    }
+
+    document.getElementById('detailCloseBtn').onclick = () => {
+      document.getElementById('detailModalOverlay').style.display = 'none';
+    };
+
+    // Debounced search — refetches page 1 shortly after typing stops,
+    // rather than hitting the server on every keystroke.
+    let techSearchTimer;
+    document.getElementById('techSearch').addEventListener('input', (e) => {
+      clearTimeout(techSearchTimer);
+      techSearchTimer = setTimeout(() => {
+        techPageState.q = e.target.value;
+        techPageState.page = 1;
+        renderTechnicians(latestState.technicians, latestState.jobs);
+      }, 300);
+    });
+
+    let jobSearchTimer;
+    document.getElementById('jobSearch').addEventListener('input', (e) => {
+      clearTimeout(jobSearchTimer);
+      jobSearchTimer = setTimeout(() => {
+        jobPageState.q = e.target.value;
+        jobPageState.page = 1;
+        renderJobs(latestState.jobs, latestState.technicians);
+      }, 300);
+    });
+
+    let customerSearchTimer;
+    document.getElementById('customerSearch').addEventListener('input', (e) => {
+      clearTimeout(customerSearchTimer);
+      customerSearchTimer = setTimeout(() => {
+        closeCustomerDetail();
+        customerPageState.q = e.target.value;
+        customerPageState.page = 1;
+        loadCustomers();
+      }, 300);
+    });
+
+    // Shared pagination-row renderer, reused by Customers, Tickets, and the
+    // Reports job-history table below.
+    function renderPagination(containerId, total, page, pageSize, onPageChange) {
+      const el = document.getElementById(containerId);
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      el.innerHTML = `
+        <span>${total} total · page ${page} of ${totalPages}</span>
+        <span style="display:flex; gap:6px;">
+          <button ${page <= 1 ? 'disabled' : ''} id="${containerId}-prev">‹ Prev</button>
+          <button ${page >= totalPages ? 'disabled' : ''} id="${containerId}-next">Next ›</button>
+        </span>`;
+      if (page > 1) document.getElementById(`${containerId}-prev`).onclick = () => onPageChange(page - 1);
+      if (page < totalPages) document.getElementById(`${containerId}-next`).onclick = () => onPageChange(page + 1);
+    }
+
+    // --- TICKETS tab: full searchable/paginated ticket history -----------
+    let ticketPageState = { page: 1, q: '', data: [] };
+    const TICKET_PAGE_SIZE = 15;
+
+    async function loadTickets() {
+      const params = new URLSearchParams({ page: ticketPageState.page, pageSize: TICKET_PAGE_SIZE });
+      if (ticketPageState.q) params.set('q', ticketPageState.q);
+      const res = await fetch(`/api/tickets?${params}`);
+      if (!res.ok) return;
+      const { tickets, total, page, pageSize } = await res.json();
+      ticketPageState.data = tickets;
+      renderTicketList(tickets);
+      renderPagination('ticketPagination', total, page, pageSize, (p) => { ticketPageState.page = p; loadTickets(); });
+    }
+
+    function renderTicketList(tickets) {
+      const el = document.getElementById('ticketList');
+      el.innerHTML = tickets.length
+        ? tickets.map((t, i) => `
+          <div class="ticket-row" onclick="openTicketDetail(${i})">
+            <div class="job-top">
+              <span class="job-subject">${t.id} · ${t.subject}</span>
+              <span class="badge ${t.status.replace(/\s/g, '')}">${t.status.toUpperCase()}</span>
+            </div>
+            <div class="job-meta">${t.serviceName} · ${t.customerName}</div>
+            <div class="job-meta">${t.technicianName || 'Unassigned'} · ${formatDate(t.assignedAt)}</div>
+          </div>`).join('')
+        : '<div class="no-devices">No tickets match your search</div>';
+    }
+
+    function openTicketDetail(index) {
+      const t = ticketPageState.data[index];
+      document.getElementById('detailTitle').textContent = `${t.id} · ${t.subject}`;
+      document.getElementById('detailBody').innerHTML = `
+        <div class="detail-row"><span class="detail-label">Status</span><span class="badge ${t.status.replace(/\s/g, '')}">${t.status.toUpperCase()}</span></div>
+        <div class="detail-row"><span class="detail-label">Service</span><span class="detail-value">${t.serviceName}</span></div>
+        <div class="detail-row"><span class="detail-label">Customer</span><span class="detail-value">${t.customerName}<br/>${t.customerPhone}</span></div>
+        <div class="detail-row"><span class="detail-label">Charger</span><span class="detail-value">${t.chargerNickname}</span></div>
+        <div class="detail-row"><span class="detail-label">Technician</span><span class="detail-value">${t.technicianName || 'Unassigned'}</span></div>
+        ${t.delayAlerted ? '<div class="detail-row"><span class="detail-label">SLA</span><span class="badge delayed">DELAYED</span></div>' : ''}
+        <div class="detail-row"><span class="detail-label">Assigned</span><span class="detail-value">${formatDate(t.assignedAt)}</span></div>
+        <div class="detail-row"><span class="detail-label">Arrived</span><span class="detail-value">${formatDate(t.arrivedAt)}</span></div>
+        <div class="detail-row"><span class="detail-label">Completed</span><span class="detail-value">${formatDate(t.completedAt)}</span></div>
+      `;
+      document.getElementById('detailModalOverlay').style.display = 'flex';
+    }
+
+    let ticketSearchTimer;
+    document.getElementById('ticketSearch').addEventListener('input', (e) => {
+      clearTimeout(ticketSearchTimer);
+      ticketSearchTimer = setTimeout(() => {
+        ticketPageState.q = e.target.value;
+        ticketPageState.page = 1;
+        loadTickets();
+      }, 300);
+    });
+
+    // --- ATTENDANCE tab: one summary view (Today / This Month) --------------
+    // Replaces what used to be a paginated log plus a separate technician×day
+    // grid: the client wanted one view, shaped like a normal attendance
+    // dashboard (stat tiles + a donut + a day-by-day list), with no
+    // clock-out/duration columns since attendance is check-in-only now.
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const ATT_STATUS_LABEL = {
+      present: 'Present', absent: 'Absent', 'leave-approved': 'On leave',
+      'leave-pending': 'Leave pending', weekend: 'Weekend', future: '—',
+    };
+    const ATT_STATUS_BADGE_CLASS = {
+      present: 'active', absent: 'rejected', 'leave-approved': 'approved',
+      'leave-pending': 'pending', weekend: 'inactive', future: 'inactive',
+    };
+
+    let attMode = 'day';
+    let attDayCursor = new Date(); attDayCursor.setHours(0, 0, 0, 0);
+    let attMonthCursor = new Date(); attMonthCursor.setDate(1); attMonthCursor.setHours(0, 0, 0, 0);
+    let attDonutChart;
+
+    function toDateKeyLocal(d) {
+      const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+
+    async function loadAttendance() {
+      document.getElementById('attDayNav').style.display = attMode === 'day' ? 'flex' : 'none';
+      document.getElementById('attMonthNav').style.display = attMode === 'month' ? 'flex' : 'none';
+      document.getElementById('attDayList').style.display = attMode === 'day' ? '' : 'none';
+      document.getElementById('attMonthTableWrap').style.display = attMode === 'month' ? '' : 'none';
+      attMode === 'day' ? loadAttendanceDay() : loadAttendanceMonth();
+    }
+
+    function renderDonut(segments) {
+      // segments: [{ label, value, color }]
+      const legend = document.getElementById('attDonutLegend');
+      legend.innerHTML = segments.map(s => `<div class="att-donut-legend-item"><span class="att-donut-dot" style="background:${s.color};"></span>${s.label} (${s.value})</div>`).join('');
+      if (attDonutChart) attDonutChart.destroy();
+      const total = segments.reduce((sum, s) => sum + s.value, 0);
+      attDonutChart = new Chart(document.getElementById('attDonutChart'), {
+        type: 'doughnut',
+        data: {
+          labels: segments.map(s => s.label),
+          datasets: [{ data: total ? segments.map(s => s.value) : segments.map(() => 0), backgroundColor: segments.map(s => s.color), borderWidth: 0 }],
+        },
+        options: { responsive: false, cutout: '70%', plugins: { legend: { display: false }, tooltip: { enabled: !!total } } },
+      });
+    }
+
+    async function loadAttendanceDay() {
+      const date = toDateKeyLocal(attDayCursor);
+      const isToday = date === toDateKeyLocal(new Date());
+      document.getElementById('attDayLabel').textContent = isToday
+        ? `Today, ${attDayCursor.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}`
+        : attDayCursor.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+      document.getElementById('attDayPicker').value = date;
+      document.getElementById('attDayPicker').max = toDateKeyLocal(new Date());
+
+      const res = await fetch(`/api/attendance/summary?mode=day&date=${date}`);
+      if (!res.ok) return;
+      const { totals, rows } = await res.json();
+
+      document.getElementById('attStatsGrid').innerHTML = `
+        <div class="att-stat up"><div class="num">${totals.present}</div><div class="label">Present</div></div>
+        <div class="att-stat down"><div class="num">${totals.absent}</div><div class="label">Absent</div></div>
+        <div class="att-stat"><div class="num">${totals.leaveApproved + totals.leavePending}</div><div class="label">On leave</div></div>
+        <div class="att-stat"><div class="num">${totals.total}</div><div class="label">Total technicians</div></div>
+      `;
+      renderDonut([
+        { label: 'Present', value: totals.present, color: CHART_GREEN },
+        { label: 'Absent', value: totals.absent, color: '#d13438' },
+        { label: 'On leave', value: totals.leaveApproved + totals.leavePending, color: CHART_AMBER },
+      ]);
+
+      const canMark = date <= toDateKeyLocal(new Date());
+      const el = document.getElementById('attDayList');
+      el.innerHTML = rows.length
+        ? rows.map(r => `
+          <div class="attendance-row">
+            <div>
+              <div class="attendance-name">${r.technicianName}</div>
+              <div class="attendance-times">${r.checkInAt ? 'Checked in at ' + new Date(r.checkInAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:10px;">
+              <span class="status-badge ${ATT_STATUS_BADGE_CLASS[r.status]}">${ATT_STATUS_LABEL[r.status]}</span>
+              ${r.status === 'present'
+                ? `<button class="att-mark-btn att-unmark-btn" onclick="unmarkAttendance('${r.attendanceId}')">Remove</button>`
+                : (canMark ? `<button class="att-mark-btn" onclick="markAttendance('${r.technicianId}', '${date}')">Mark present</button>` : '')}
+            </div>
+          </div>`).join('')
+        : '<div class="no-devices">No technicians yet</div>';
+    }
+
+    // Admin marking attendance for a technician who forgot to check in
+    // themselves — same idea as the leave approve/reject actions: an
+    // explicit admin action on top of what the technician's own app
+    // records, never silent.
+    async function markAttendance(technicianId, date) {
+      const res = await fetch('/api/attendance/mark', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ technicianId, date }),
+      });
+      if (!res.ok) {
+        const { error } = await res.json().catch(() => ({}));
+        alert(error || 'Could not mark attendance');
+        return;
+      }
+      loadAttendanceDay();
+    }
+
+    async function unmarkAttendance(id) {
+      if (!confirm('Remove this attendance record?')) return;
+      const res = await fetch(`/api/attendance/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const { error } = await res.json().catch(() => ({}));
+        alert(error || 'Could not remove attendance record');
+        return;
+      }
+      loadAttendanceDay();
+    }
+
+    async function loadAttendanceMonth() {
+      const monthParam = toDateKeyLocal(attMonthCursor).slice(0, 7);
+      const res = await fetch(`/api/attendance/summary?mode=month&month=${monthParam}`);
+      if (!res.ok) return;
+      const { month, totals, rows } = await res.json();
+
+      const monthLabel = new Date(month + '-01T00:00:00').toLocaleDateString([], { month: 'long', year: 'numeric' });
+      document.getElementById('attMonthLabel').textContent = monthLabel;
+      const isCurrentMonth = monthParam === toDateKeyLocal(new Date()).slice(0, 7);
+      document.getElementById('attNextMonth').disabled = isCurrentMonth;
+
+      document.getElementById('attStatsGrid').innerHTML = `
+        <div class="att-stat up"><div class="num">${totals.presentDays}</div><div class="label">Present days</div></div>
+        <div class="att-stat down"><div class="num">${totals.absentDays}</div><div class="label">Absent days</div></div>
+        <div class="att-stat"><div class="num">${totals.leaveDays}</div><div class="label">Leave days</div></div>
+      `;
+      renderDonut([
+        { label: 'Present', value: totals.presentDays, color: CHART_GREEN },
+        { label: 'Absent', value: totals.absentDays, color: '#d13438' },
+        { label: 'On leave', value: totals.leaveDays, color: CHART_AMBER },
+      ]);
+
+      const table = document.getElementById('attMonthTable');
+      const bodyRows = rows.map(r => `
+        <tr><td>${r.technicianName}</td><td>${r.presentDays}</td><td>${r.absentDays}</td><td>${r.leaveDays}</td></tr>
+      `).join('');
+      table.innerHTML = `<thead><tr><th>Technician</th><th>Present</th><th>Absent</th><th>Leave</th></tr></thead><tbody>${bodyRows || '<tr><td colspan="4">No technicians yet</td></tr>'}</tbody>`;
+    }
+
+    document.getElementById('attModeDay').onclick = () => {
+      attMode = 'day';
+      document.getElementById('attModeDay').classList.add('active');
+      document.getElementById('attModeMonth').classList.remove('active');
+      loadAttendance();
+    };
+    document.getElementById('attModeMonth').onclick = () => {
+      attMode = 'month';
+      document.getElementById('attModeMonth').classList.add('active');
+      document.getElementById('attModeDay').classList.remove('active');
+      loadAttendance();
+    };
+    document.getElementById('attPrevDay').onclick = () => {
+      attDayCursor = new Date(attDayCursor.getTime() - DAY_MS);
+      loadAttendanceDay();
+    };
+    document.getElementById('attNextDay').onclick = () => {
+      attDayCursor = new Date(attDayCursor.getTime() + DAY_MS);
+      loadAttendanceDay();
+    };
+    document.getElementById('attDayPicker').addEventListener('change', (e) => {
+      if (!e.target.value) return;
+      const [y, m, d] = e.target.value.split('-').map(Number);
+      attDayCursor = new Date(y, m - 1, d);
+      loadAttendanceDay();
+    });
+    document.getElementById('attPrevMonth').onclick = () => {
+      attMonthCursor = new Date(attMonthCursor.getFullYear(), attMonthCursor.getMonth() - 1, 1);
+      loadAttendanceMonth();
+    };
+    document.getElementById('attNextMonth').onclick = () => {
+      attMonthCursor = new Date(attMonthCursor.getFullYear(), attMonthCursor.getMonth() + 1, 1);
+      loadAttendanceMonth();
+    };
+
+    // --- ATTENDANCE tab: Attendance / Leave requests sub-tabs ----------------
+    const attSubButtons = {
+      main: { btn: document.getElementById('attSubMain'), section: document.getElementById('attMainSection') },
+      leave: { btn: document.getElementById('attSubLeave'), section: document.getElementById('attLeaveSection') },
+    };
+    function showAttSub(name) {
+      Object.entries(attSubButtons).forEach(([key, s]) => {
+        s.btn.classList.toggle('active', key === name);
+        s.section.style.display = key === name ? '' : 'none';
+      });
+    }
+    attSubButtons.main.btn.onclick = () => showAttSub('main');
+    attSubButtons.leave.btn.onclick = () => showAttSub('leave');
+
+    let leavePageState = { page: 1, q: '', status: 'pending' };
+    const LEAVE_PAGE_SIZE = 15;
+
+    async function loadLeave() {
+      const params = new URLSearchParams({ page: leavePageState.page, pageSize: LEAVE_PAGE_SIZE });
+      if (leavePageState.q) params.set('q', leavePageState.q);
+      if (leavePageState.status) params.set('status', leavePageState.status);
+      const res = await fetch(`/api/leave?${params}`);
+      if (!res.ok) return;
+      const { leave, total, page, pageSize } = await res.json();
+
+      const el = document.getElementById('leaveList');
+      el.innerHTML = leave.length
+        ? leave.map(l => `
+          <div class="leave-row">
+            <div class="leave-top">
+              <div class="attendance-name">${l.technicianName}</div>
+              <span class="status-badge ${l.status}">${l.status}</span>
+            </div>
+            <div class="attendance-times">${l.fromDate} → ${l.toDate}</div>
+            <div class="leave-reason">${l.reason}</div>
+            ${l.status === 'pending' ? `
+              <div class="leave-actions">
+                <button class="leave-approve-btn" onclick="decideLeave('${l.id}', 'approved')">Approve</button>
+                <button class="leave-reject-btn" onclick="decideLeave('${l.id}', 'rejected')">Reject</button>
+              </div>` : ''}
+          </div>`).join('')
+        : '<div class="no-devices">No leave requests match your filters</div>';
+
+      renderPagination('leavePagination', total, page, pageSize, (p) => { leavePageState.page = p; loadLeave(); });
+      updateLeavePendingBadge();
+    }
+
+    async function updateLeavePendingBadge() {
+      const res = await fetch('/api/leave?status=pending&pageSize=1');
+      if (!res.ok) return;
+      const { total } = await res.json();
+      const badge = document.getElementById('leavePendingBadge');
+      if (total > 0) {
+        badge.textContent = total;
+        badge.style.display = '';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+
+    async function decideLeave(id, status) {
+      const res = await fetch(`/api/leave/${id}/decide`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) {
+        const { error } = await res.json().catch(() => ({}));
+        alert(error || 'Could not update this leave request');
+        return;
+      }
+      loadLeave();
+    }
+
+    document.getElementById('leaveStatusFilter').addEventListener('change', (e) => {
+      leavePageState.status = e.target.value;
+      leavePageState.page = 1;
+      loadLeave();
+    });
+
+    let leaveSearchTimer;
+    document.getElementById('leaveSearch').addEventListener('input', (e) => {
+      clearTimeout(leaveSearchTimer);
+      leaveSearchTimer = setTimeout(() => {
+        leavePageState.q = e.target.value;
+        leavePageState.page = 1;
+        loadLeave();
+      }, 300);
+    });
+
+    // --- REPORTS tab ---------------------------------------------------------
+    let completedChart, responseChart, slaChart, serviceChart, attendanceTrendChart;
+    const CHART_GREEN = '#1a6d26';
+    const CHART_AMBER = '#e59f14';
+
+    // Date-range state shared by the summary/charts fetch, the technician
+    // table, and the CSV export link — "This Month" etc. mean the same
+    // thing everywhere in Reports because they all read from this.
+    let reportRange = { from: null, to: null };
+
+    function computePresetRange(preset) {
+      const now = new Date();
+      if (preset === 'this_month') {
+        const from = new Date(now.getFullYear(), now.getMonth(), 1);
+        return { from: from.getTime(), to: Date.now() };
+      }
+      if (preset === 'last_month') {
+        const from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const to = new Date(now.getFullYear(), now.getMonth(), 1);
+        return { from: from.getTime(), to: to.getTime() - 1 };
+      }
+      if (preset === 'last_quarter') {
+        const from = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate());
+        return { from: from.getTime(), to: Date.now() };
+      }
+      return { from: null, to: null }; // 'all'
+    }
+
+    const rangePresetEl = document.getElementById('rangePreset');
+    const rangeFromEl = document.getElementById('rangeFrom');
+    const rangeToEl = document.getElementById('rangeTo');
+    const rangeToLabelEl = document.getElementById('rangeToLabel');
+
+    rangePresetEl.addEventListener('change', () => {
+      const isCustom = rangePresetEl.value === 'custom';
+      rangeFromEl.style.display = isCustom ? 'inline-block' : 'none';
+      rangeToEl.style.display = isCustom ? 'inline-block' : 'none';
+      rangeToLabelEl.style.display = isCustom ? 'inline' : 'none';
+      if (!isCustom) {
+        reportRange = computePresetRange(rangePresetEl.value);
+        techReportState.page = 1;
+        loadReports();
+      }
+    });
+    [rangeFromEl, rangeToEl].forEach((el) => el.addEventListener('change', () => {
+      if (rangePresetEl.value !== 'custom') return;
+      reportRange = {
+        from: rangeFromEl.value ? new Date(rangeFromEl.value).getTime() : null,
+        to: rangeToEl.value ? new Date(rangeToEl.value + 'T23:59:59').getTime() : null,
+      };
+      techReportState.page = 1;
+      loadReports();
+    }));
+
+    function renderCharts(completedTop, responseTop, summary) {
+      // Chart.js instances must be destroyed before re-creating on the same
+      // canvas, or repeated report refreshes leak charts on top of each other.
+      if (completedChart) completedChart.destroy();
+      completedChart = new Chart(document.getElementById('completedChart'), {
+        type: 'bar',
+        data: { labels: completedTop.map((r) => r.name), datasets: [{ label: 'Completed', data: completedTop.map((r) => r.completed), backgroundColor: CHART_GREEN, borderRadius: 6 }] },
+        options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } },
+      });
+
+      if (responseChart) responseChart.destroy();
+      // Sorted ascending (fastest first) server-side — "best response time"
+      // reads more naturally fastest-first than the completed chart, which
+      // is naturally "most first".
+      responseChart = new Chart(document.getElementById('responseChart'), {
+        type: 'bar',
+        data: { labels: responseTop.map((r) => r.name), datasets: [{ label: 'Avg minutes', data: responseTop.map((r) => r.avgResponseMinutes ?? 0), backgroundColor: CHART_AMBER, borderRadius: 6 }] },
+        options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
+      });
+
+      if (slaChart) slaChart.destroy();
+      const totalAssigned = summary.completed + summary.active; // jobs that have gone through assignment
+      const onTime = Math.max(totalAssigned - summary.delayedCount, 0);
+      slaChart = new Chart(document.getElementById('slaChart'), {
+        type: 'doughnut',
+        data: { labels: ['On time', 'Delayed'], datasets: [{ data: [onTime, summary.delayedCount], backgroundColor: [CHART_GREEN, '#d13438'] }] },
+        options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } } } },
+      });
+
+      if (serviceChart) serviceChart.destroy();
+      const serviceEntries = Object.entries(summary.serviceBreakdown || {});
+      const servicePalette = [CHART_GREEN, CHART_AMBER, '#5c6e62', '#8a978d']; // covers up to 4 service types before repeating
+      serviceChart = new Chart(document.getElementById('serviceChart'), {
+        type: 'doughnut',
+        data: {
+          labels: serviceEntries.map(([name]) => name),
+          datasets: [{ data: serviceEntries.map(([, count]) => count), backgroundColor: serviceEntries.map((_, i) => servicePalette[i % servicePalette.length]) }],
+        },
+        options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } } } },
+      });
+    }
+
+    function formatDate(ts) {
+      if (!ts) return '—';
+      return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    function rangeQueryString() {
+      const params = new URLSearchParams();
+      if (reportRange.from) params.set('from', reportRange.from);
+      if (reportRange.to) params.set('to', reportRange.to);
+      return params.toString();
+    }
+
+    async function loadReports() {
+      const rangeQs = rangeQueryString();
+
+      const reportsRes = await fetch(`/api/reports${rangeQs ? '?' + rangeQs : ''}`);
+      if (!reportsRes.ok) return;
+      const { summary } = await reportsRes.json();
+
+      document.getElementById('generatedAt').textContent = `Generated ${new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
+      document.getElementById('exportCsvBtn').href = `/api/reports/export${rangeQs ? '?' + rangeQs : ''}`;
+
+      document.getElementById('summaryGridVolume').innerHTML = `
+        <div class="summary-card"><div class="num">${summary.totalJobs}</div><div class="label">Total jobs</div></div>
+        <div class="summary-card"><div class="num">${summary.completed}</div><div class="label">Completed</div></div>
+        <div class="summary-card"><div class="num">${summary.unassigned}</div><div class="label">Unassigned</div></div>
+        <div class="summary-card"><div class="num">${summary.active}</div><div class="label">Active now</div></div>
+      `;
+
+      document.getElementById('summaryGridQuality').innerHTML = `
+        <div class="summary-card ${summary.slaComplianceRate !== null && summary.slaComplianceRate < 90 ? 'warn' : 'good'}">
+          <div class="num">${summary.slaComplianceRate !== null ? summary.slaComplianceRate + '%' : '—'}</div>
+          <div class="label">SLA compliance</div>
+        </div>
+        <div class="summary-card"><div class="num">${summary.avgResponseMinutes !== null ? summary.avgResponseMinutes + ' min' : '—'}</div><div class="label">Avg response time</div></div>
+        <div class="summary-card ${summary.delayedCount > 0 ? 'warn' : ''}"><div class="num">${summary.delayedCount}</div><div class="label">Delayed jobs</div></div>
+      `;
+
+      document.getElementById('summaryGridCapacity').innerHTML = `
+        <div class="summary-card"><div class="num">${summary.availableTechnicians}/${summary.availableTechnicians + summary.onJobTechnicians}</div><div class="label">Technicians free</div></div>
+      `;
+
+      // Charts show the top 10 by the metric each chart is about — a bar
+      // per technician stops being readable well before a fleet reaches
+      // the hundreds this needs to scale to.
+      const [completedTop, responseTop] = await Promise.all([
+        fetch(`/api/reports/technicians?${rangeQs ? rangeQs + '&' : ''}sortBy=completed&sortDir=desc&pageSize=10`).then(r => r.json()),
+        fetch(`/api/reports/technicians?${rangeQs ? rangeQs + '&' : ''}sortBy=avgResponseMinutes&sortDir=asc&pageSize=10`).then(r => r.json()),
+      ]);
+      renderCharts(completedTop.rows, responseTop.rows, summary);
+
+      loadTechnicianReport();
+      loadAttendanceReport();
+    }
+
+    // --- Attendance reporting (Reports tab) ---------------------------------
+    const attendanceGroupByEl = document.getElementById('attendanceGroupBy');
+    attendanceGroupByEl.addEventListener('change', loadAttendanceReport);
+
+    async function loadAttendanceReport() {
+      const rangeQs = rangeQueryString();
+      const groupBy = attendanceGroupByEl.value;
+      const sep = rangeQs ? '&' : '';
+      const res = await fetch(`/api/reports/attendance?${rangeQs}${sep}groupBy=${groupBy}`);
+      if (!res.ok) return;
+      const { summary, perTechnician, series } = await res.json();
+
+      document.getElementById('attendanceSummaryGrid').innerHTML = `
+        <div class="summary-card"><div class="num">${summary.totalPresentDays}</div><div class="label">Total days present</div></div>
+        <div class="summary-card"><div class="num">${summary.avgPresentDaysPerTechnician}</div><div class="label">Avg days / technician</div></div>
+        <div class="summary-card good"><div class="num">${summary.checkedInTodayCount}</div><div class="label">Checked in today</div></div>
+      `;
+
+      document.getElementById('attendanceReportBody').innerHTML = perTechnician.length
+        ? perTechnician.map(r => `
+          <tr>
+            <td>${r.name}</td>
+            <td>${r.presentDays}</td>
+          </tr>`).join('')
+        : '<tr><td colspan="2" style="text-align:center; color:var(--faint);">No attendance in this range</td></tr>';
+
+      const groupLabel = { day: 'day', week: 'week', month: 'month' }[groupBy];
+      document.getElementById('attendanceChartTitle').textContent = `Days present per ${groupLabel}`;
+
+      if (attendanceTrendChart) attendanceTrendChart.destroy();
+      attendanceTrendChart = new Chart(document.getElementById('attendanceTrendChart'), {
+        type: 'bar',
+        data: {
+          labels: series.map(s => s.period),
+          datasets: [{ label: 'Days present', data: series.map(s => s.presentCount), backgroundColor: CHART_GREEN, borderRadius: 4 }],
+        },
+        options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } },
+      });
+    }
+
+    // --- Technician performance table: paginated, searchable, sortable ---
+    let techReportState = { page: 1, q: '', sortBy: 'completed', sortDir: 'desc' };
+    const TECH_REPORT_PAGE_SIZE = 15;
+
+    async function loadTechnicianReport() {
+      const rangeQs = rangeQueryString();
+      const params = new URLSearchParams({
+        page: techReportState.page,
+        pageSize: TECH_REPORT_PAGE_SIZE,
+        sortBy: techReportState.sortBy,
+        sortDir: techReportState.sortDir,
+      });
+      if (techReportState.q) params.set('q', techReportState.q);
+      if (reportRange.from) params.set('from', reportRange.from);
+      if (reportRange.to) params.set('to', reportRange.to);
+
+      const res = await fetch(`/api/reports/technicians?${params}`);
+      if (!res.ok) return;
+      const { rows, total, page, pageSize } = await res.json();
+
+      document.getElementById('reportBody').innerHTML = rows.length
+        ? rows.map(r => `
+          <tr>
+            <td>${r.name}</td>
+            <td><span class="dot ${r.status}" style="display:inline-block; margin-right:6px;"></span>${r.status.replace('_',' ')}</td>
+            <td>${r.completed}</td>
+            <td>${r.active}</td>
+            <td>${r.delayed > 0 ? `<span style="color:var(--red);font-weight:700;">${r.delayed}</span>` : '0'}</td>
+            <td>${r.avgResponseMinutes !== null ? r.avgResponseMinutes + ' min' : '—'}</td>
+          </tr>`).join('')
+        : '<tr><td colspan="6" style="text-align:center; color:var(--faint);">No technicians match your search</td></tr>';
+
+      renderPagination('techReportPagination', total, page, pageSize, (p) => { techReportState.page = p; loadTechnicianReport(); });
+      updateSortIndicators();
+    }
+
+    function updateSortIndicators() {
+      document.querySelectorAll('#reportsView th[data-sort]').forEach(th => {
+        const isActive = th.dataset.sort === techReportState.sortBy;
+        th.textContent = th.dataset.label + (isActive ? (techReportState.sortDir === 'desc' ? ' ▼' : ' ▲') : '');
+      });
+    }
+
+    function sortTechnicianReport(field) {
+      if (techReportState.sortBy === field) {
+        techReportState.sortDir = techReportState.sortDir === 'desc' ? 'asc' : 'desc';
+      } else {
+        techReportState.sortBy = field;
+        techReportState.sortDir = 'desc';
+      }
+      techReportState.page = 1;
+      loadTechnicianReport();
+    }
+
+    let techReportSearchTimer;
+    document.getElementById('techReportSearch').addEventListener('input', (e) => {
+      clearTimeout(techReportSearchTimer);
+      techReportSearchTimer = setTimeout(() => {
+        techReportState.q = e.target.value;
+        techReportState.page = 1;
+        loadTechnicianReport();
+      }, 300);
+    });
+
+    const socket = io();
+    socket.on('state', render);
+  </script>
+</body>
+</html>

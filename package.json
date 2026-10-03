@@ -1,0 +1,21 @@
+{
+  "name": "supranya-admin",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js",
+    "db:migrate": "node db/migrate.js",
+    "db:seed-admin": "node db/seed-admin.js",
+    "db:seed-demo": "node db/seed-demo.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^18.0.4",
+    "express": "^4.19.2",
+    "express-session": "^1.18.0",
+    "pg": "^8.23.0",
+    "socket.io": "^4.7.5"
+  }
+}

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Supranya Admin — Login</title>
+<style>
+  :root { --green: #1a6d26; --ink: #12241a; --page: #f4f7f5; --border: #e3e7e2; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: var(--page); display: flex; align-items: center; justify-content: center; height: 100vh; }
+  .card { background: #fff; border-radius: 16px; padding: 32px; width: 340px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); }
+  .logo { width: 56px; height: 56px; border-radius: 50%; display: block; margin: 0 auto 14px; }
+  h1 { font-size: 18px; margin: 0 0 4px; color: var(--ink); }
+  p.sub { font-size: 13px; color: #8a978d; margin: 0 0 24px; }
+  label { font-size: 11.5px; font-weight: 600; color: #5c6e62; display: block; margin-bottom: 6px; }
+  input { width: 100%; padding: 11px 14px; border-radius: 999px; border: 1px solid var(--border); font-size: 14px; margin-bottom: 16px; }
+  button { width: 100%; padding: 13px; border-radius: 999px; border: none; background: var(--green); color: #fff; font-size: 14px; font-weight: 700; cursor: pointer; }
+  button:hover { opacity: 0.92; }
+  .error { color: #b3261e; font-size: 12.5px; margin-bottom: 14px; display: none; }
+</style>
+</head>
+<body>
+  <form class="card" id="loginForm">
+    <img class="logo" src="/assets/logo.png" alt="Supranya" />
+    <h1>Supranya Admin</h1>
+    <p class="sub">Sign in to assign jobs and track technicians</p>
+    <div class="error" id="error"></div>
+    <label for="username">Username</label>
+    <input id="username" name="username" autocomplete="username" />
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" />
+    <button type="submit">Sign in</button>
+  </form>
+
+  <script>
+    const form = document.getElementById('loginForm');
+    const errorBox = document.getElementById('error');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorBox.style.display = 'none';
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      if (res.ok) {
+        window.location.href = '/dashboard.html';
+      } else {
+        const data = await res.json().catch(() => ({}));
+        errorBox.textContent = data.error || 'Login failed';
+        errorBox.style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>
