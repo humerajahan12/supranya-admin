@@ -837,14 +837,20 @@ Better than it was, but still not fully hardened for the open internet:
   `.env`, not a hardcoded string in the source.
 - ✅ **Fixed** — data persists in real Postgres now, not an in-memory array.
   Survives restarts, crashes, and redeploys.
-- ⚠️ **Still open** — most technician/customer endpoints (check-in, job
-  status updates, device/address registration, ticket creation) have no
-  real authentication. They're gated only by knowing an ID in the URL,
-  which is fine while you and a couple of test phones are the only ones
-  hitting it, but not for the public internet. This needs a real auth
-  token per technician/customer — the natural place to issue one is right
-  after MSG91 OTP verification — before this genuinely goes live. Flagged
-  as the next security item in the sequence below.
+- ✅ **Fixed** — every technician/customer endpoint that used to be gated
+  only by knowing an ID in the URL (check-in, leave, job status updates,
+  device/address registration, ticket lookup, payment verification) now
+  requires a real signed token (`src/clientAuth.js`, JWT via
+  `AUTH_TOKEN_SECRET` in `.env`), issued at the mock-OTP step
+  (`POST /api/customers/register`, `GET /api/technicians/by-phone`) and
+  checked against the ID in the URL on every call. Before this, anyone who
+  learned or guessed another customer's or technician's ID could read or
+  write their data with a plain `fetch` — no login needed. **Still a real
+  gap**: the OTP step itself is still a mock ("any 4 digits works"), so a
+  token is only as trustworthy as knowing someone's phone number right
+  now — this closes the ID-guessing hole, it doesn't replace MSG91. A
+  90-day token expiry was chosen deliberately, since there's no
+  refresh-token flow yet; revisit once MSG91 is wired in.
 - ⚠️ **Still open** — no HTTPS is configured in this codebase itself; it's
   HTTP-only. Whichever host you deploy to (Render, Railway, Fly.io, etc.)
   should give you HTTPS automatically on their domain — just confirm it's
@@ -891,11 +897,14 @@ has to happen *first*, before Razorpay, rather than after it.
 2. **Deploy `supranya-admin`** to a real HTTPS host.
 3. **Razorpay** — register with the live URL, generate keys, integrate
    real payment (replacing the current mock step).
-4. **MSG91 OTP** integration.
-5. **Security hardening** — real per-technician/customer auth tokens (the
-   open item flagged above).
+4. ~~Security hardening~~ — done: real per-technician/customer auth tokens
+   (see Security section above). The OTP step they're issued from is still
+   a mock, which is exactly what the next step fixes.
+5. **MSG91 OTP** integration — real OTP needs DLT registration first (a
+   telecom-regulator requirement for sending OTP/SMS to Indian numbers;
+   needs business PAN/GST documents, can take days — start this early).
 6. **Mobile app config** — point at the real deployed URL instead of the
-   LAN-IP placeholder.
+   LAN-IP placeholder. (Already done for this deployment.)
 7. **App store submission paperwork.**
 
 ## Connecting the mobile app (supranya-charge-app)

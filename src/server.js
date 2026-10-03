@@ -12,6 +12,7 @@ const repo = require('../db/repo');
 const { startSimulation, stopSimulation } = require('./simulate');
 const { geocodeSearch } = require('./routing');
 const payments = require('./payments');
+const { issueToken, requireCustomerAuth, requireTechnicianAuth } = require('./clientAuth');
 
 const app = express();
 const server = http.createServer(app);
@@ -19,6 +20,9 @@ const io = new Server(server);
 
 if (!process.env.SESSION_SECRET) {
   throw new Error('SESSION_SECRET is not set. Copy .env.example to .env and fill in a real random secret before starting the server.');
+}
+if (!process.env.AUTH_TOKEN_SECRET) {
+  throw new Error('AUTH_TOKEN_SECRET is not set. Add a second, separate random secret to .env — this one signs the mobile app\'s customer/technician login tokens.');
 }
 
 app.use(express.json());
@@ -114,10 +118,21 @@ app.post('/api/customers/register', async (req, res) => {
   }
 
   await broadcastState();
-  res.status(201).json(customer);
+  // Issued here (right after the OTP step, mocked as it currently is) so
+  // the app has a real token proving "this device is customer X" for every
+  // call it makes afterwards, instead of just trusting whatever id it
+  // sends in the URL.
+  res.status(201).json({ ...customer, token: issueToken({ sub: customer.id, role: 'customer' }) });
 });
 
-app.post('/api/customers/:id/devices', async (req, res) => {
+// requireCustomerAuth below checks the token belongs to *some* customer;
+// the explicit req.params.id === req.authSub check then makes sure it's
+// THIS customer, not just any logged-in one — without it, any customer's
+// token would work on any other customer's :id.
+app.post('/api/customers/:id/devices', requireCustomerAuth, async (req, res) => {
+  if (req.params.id !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this customer account.' });
+  }
   const customer = await repo.customers.getById(req.params.id);
   if (!customer) return res.status(404).json({ error: 'Customer not found' });
 
@@ -161,7 +176,10 @@ app.patch('/api/customers/:id/devices/:deviceId', requireAuth, async (req, res) 
 // (the customer app isn't an admin session), scoped to that customerId.
 // The first address a customer adds is automatically their default; a
 // later one marked isDefault:true unsets any previous default.
-app.post('/api/customers/:id/addresses', async (req, res) => {
+app.post('/api/customers/:id/addresses', requireCustomerAuth, async (req, res) => {
+  if (req.params.id !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this customer account.' });
+  }
   const customer = await repo.customers.getById(req.params.id);
   if (!customer) return res.status(404).json({ error: 'Customer not found' });
 
@@ -233,16 +251,25 @@ app.post('/api/payments/order', async (req, res) => {
   }
 });
 
-// PUBLIC — step 2, called after Razorpay's checkout reports success. Body:
+// Step 2, called after Razorpay's checkout reports success. Body:
 // { razorpay_order_id, razorpay_payment_id, razorpay_signature,
-//   customerId, customerName, customerPhone, chargerNickname, latitude,
-//   longitude, serviceId }. Only creates the ticket if the signature
-// actually verifies — this is the one place a real payment turns into a
-// real ticket.
-app.post('/api/payments/verify', async (req, res) => {
+//   customerName, customerPhone, chargerNickname, latitude, longitude,
+//   serviceId }. Only creates the ticket if the signature actually
+// verifies — this is the one place a real payment turns into a real
+// ticket.
+//
+// requireCustomerAuth below is a fix made during the security-hardening
+// pass, not how this endpoint originally shipped: it used to take a
+// customerId straight from the request body with no check that the
+// caller actually was that customer, so anyone who could guess or see
+// another customer's id could attach a payment to their account. Now the
+// customerId used on the ticket comes only from the verified token
+// (req.authSub) — the body's customerId, if a client still sends one, is
+// ignored entirely.
+app.post('/api/payments/verify', requireCustomerAuth, async (req, res) => {
   const {
     razorpay_order_id, razorpay_payment_id, razorpay_signature,
-    customerId, customerName, customerPhone, chargerNickname, latitude, longitude, serviceId,
+    customerName, customerPhone, chargerNickname, latitude, longitude, serviceId,
   } = req.body || {};
 
   if (!customerName || !customerPhone || !chargerNickname || latitude == null || longitude == null || !serviceId) {
@@ -260,7 +287,7 @@ app.post('/api/payments/verify', async (req, res) => {
     id: `TKT-${Date.now()}`,
     subject: priced.service.name,
     serviceName: priced.service.name,
-    customerId: customerId || null,
+    customerId: req.authSub,
     customerName,
     customerPhone,
     chargerNickname,
@@ -311,13 +338,19 @@ app.post('/api/jobs', requireAuth, async (req, res) => {
 });
 
 // A customer's own full record, devices included.
-app.get('/api/customers/:id', async (req, res) => {
+app.get('/api/customers/:id', requireCustomerAuth, async (req, res) => {
+  if (req.params.id !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this customer account.' });
+  }
   const customer = await repo.customers.getById(req.params.id);
   if (!customer) return res.status(404).json({ error: 'Customer not found' });
   res.json(customer);
 });
 
-// A single ticket by id.
+// A single ticket by id — intentionally left PUBLIC (no auth): the app
+// reaches this with just a ticketId it already has (e.g. the confirmation
+// screen right after booking), not a customer login, and a ticket id alone
+// doesn't expose anything beyond that one job's own status.
 app.get('/api/tickets/:id', async (req, res) => {
   const job = await repo.jobs.getById(req.params.id);
   if (!job) return res.status(404).json({ error: 'Ticket not found' });
@@ -325,7 +358,10 @@ app.get('/api/tickets/:id', async (req, res) => {
   res.json({ ...job, technicianName: technician ? technician.name : null });
 });
 
-app.get('/api/customers/:id/tickets', async (req, res) => {
+app.get('/api/customers/:id/tickets', requireCustomerAuth, async (req, res) => {
+  if (req.params.id !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this customer account.' });
+  }
   const customer = await repo.customers.getById(req.params.id);
   if (!customer) return res.status(404).json({ error: 'Customer not found' });
   const mine = await repo.jobs.listByCustomer(customer.id, customer.phone);
@@ -333,15 +369,23 @@ app.get('/api/customers/:id/tickets', async (req, res) => {
   res.json(mine.map((j) => ({ ...j, technicianName: j.technicianId ? techNameById[j.technicianId] || j.technicianId : null })));
 });
 
-// --- Technician mobile app login + job list (PUBLIC). ---------------------
+// --- Technician mobile app login + job list. ------------------------------
+// by-phone stays PUBLIC on purpose: it's the pre-login lookup itself (like
+// /api/customers/by-phone above) — there's no token yet at this point, this
+// IS how one gets issued.
 app.get('/api/technicians/by-phone', async (req, res) => {
   const phone = (req.query.phone || '').trim();
   const technician = await repo.technicians.getByPhone(phone);
   if (!technician) return res.status(404).json({ error: 'No technician account found for this phone number' });
-  res.json(technician);
+  // Mirrors /api/customers/register: this mock-OTP lookup is the
+  // technician's "login", so it's where their token gets issued.
+  res.json({ ...technician, token: issueToken({ sub: technician.id, role: 'technician' }) });
 });
 
-app.get('/api/technicians/:id/jobs', async (req, res) => {
+app.get('/api/technicians/:id/jobs', requireTechnicianAuth, async (req, res) => {
+  if (req.params.id !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this technician account.' });
+  }
   const technician = await repo.technicians.getById(req.params.id);
   if (!technician) return res.status(404).json({ error: 'Technician not found' });
   res.json(await repo.jobs.listByTechnician(technician.id));
@@ -359,9 +403,12 @@ function toDateKey(ts) {
   return `${y}-${m}-${day}`;
 }
 
-// --- Attendance (PUBLIC — marked from the technician's own app). Just a
-// check-in timestamp, once per calendar day — no check-out. ---------------
-app.post('/api/technicians/:id/attendance/check-in', async (req, res) => {
+// --- Attendance (marked from the technician's own app). Just a check-in
+// timestamp, once per calendar day — no check-out. ------------------------
+app.post('/api/technicians/:id/attendance/check-in', requireTechnicianAuth, async (req, res) => {
+  if (req.params.id !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this technician account.' });
+  }
   const technician = await repo.technicians.getById(req.params.id);
   if (!technician) return res.status(404).json({ error: 'Technician not found' });
 
@@ -374,16 +421,22 @@ app.post('/api/technicians/:id/attendance/check-in', async (req, res) => {
   res.status(201).json(record);
 });
 
-app.get('/api/technicians/:id/attendance', async (req, res) => {
+app.get('/api/technicians/:id/attendance', requireTechnicianAuth, async (req, res) => {
+  if (req.params.id !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this technician account.' });
+  }
   const technician = await repo.technicians.getById(req.params.id);
   if (!technician) return res.status(404).json({ error: 'Technician not found' });
   res.json(await repo.attendance.listByTechnician(technician.id));
 });
 
-// --- Leave requests (PUBLIC where technician-facing). ---------------------
+// --- Leave requests (technician-facing). ----------------------------------
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-app.post('/api/technicians/:id/leave', async (req, res) => {
+app.post('/api/technicians/:id/leave', requireTechnicianAuth, async (req, res) => {
+  if (req.params.id !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this technician account.' });
+  }
   const technician = await repo.technicians.getById(req.params.id);
   if (!technician) return res.status(404).json({ error: 'Technician not found' });
 
@@ -409,7 +462,10 @@ app.post('/api/technicians/:id/leave', async (req, res) => {
   res.status(201).json(request);
 });
 
-app.get('/api/technicians/:id/leave', async (req, res) => {
+app.get('/api/technicians/:id/leave', requireTechnicianAuth, async (req, res) => {
+  if (req.params.id !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this technician account.' });
+  }
   const technician = await repo.technicians.getById(req.params.id);
   if (!technician) return res.status(404).json({ error: 'Technician not found' });
   res.json(await repo.leave.listByTechnician(technician.id));
@@ -417,7 +473,10 @@ app.get('/api/technicians/:id/leave', async (req, res) => {
 
 // A technician can withdraw their own request while it's still pending —
 // once admin has decided it, it's a record, not a draft.
-app.delete('/api/technicians/:id/leave/:leaveId', async (req, res) => {
+app.delete('/api/technicians/:id/leave/:leaveId', requireTechnicianAuth, async (req, res) => {
+  if (req.params.id !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this technician account.' });
+  }
   const request = await repo.leave.getById(req.params.leaveId);
   if (!request) return res.status(404).json({ error: 'Leave request not found' });
   if (request.technicianId !== req.params.id) {
@@ -943,7 +1002,10 @@ app.post('/api/jobs/:id/status', requireAuth, async (req, res) => {
 });
 
 // Technician-facing status update — public but ownership-checked.
-app.post('/api/technicians/:techId/jobs/:jobId/status', async (req, res) => {
+app.post('/api/technicians/:techId/jobs/:jobId/status', requireTechnicianAuth, async (req, res) => {
+  if (req.params.techId !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this technician account.' });
+  }
   const job = await repo.jobs.getById(req.params.jobId);
   if (!job) return res.status(404).json({ error: 'Job not found' });
   if (job.technicianId !== req.params.techId) {
