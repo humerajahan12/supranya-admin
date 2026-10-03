@@ -1,33 +1,23 @@
-// Stands in for the real technician mobile app periodically POSTing its
-// live GPS to a /api/technicians/:id/location-style endpoint. Wire that up
-// for real once the technician app exists, and delete this whole file —
-// the admin dashboard's map code doesn't need to change, since it just
-// reacts to socket "state" events regardless of where they came from.
-//
-// Postgres-backed version: works off job/technician IDs and writes
-// through to the database on every tick, instead of mutating shared
-// in-memory objects. Real technician counts for this business are small
-// (a handful to a few dozen at once, not thousands), so a write every 2
-// seconds per currently-"en route" job is negligible load on Postgres —
-// nowhere near worth adding a batching/debounce layer for.
+// Used to fake the technician's movement with a timer-driven walk along a
+// route — that's gone now. The technician's own phone reports its real
+// position (see POST /api/technicians/:id/location in server.js, and
+// src/screens/technician/*.js's location watcher in the mobile app), so
+// this file now only does the one honest thing left to do here: compute
+// the road route for the map line, and flip the job to "En Route". It no
+// longer moves anyone or decides on its own that a technician has
+// "arrived" — that's a real status the technician marks from their own
+// app once they're actually there.
 'use strict';
 
-const { fetchRoadRoute, pointAlongPath } = require('./routing');
+const { fetchRoadRoute } = require('./routing');
 const repo = require('../db/repo');
 
-const TOTAL_STEPS = 24;
-const TICK_MS = 2000;
-
-const running = new Map(); // jobId -> intervalId
-// A technician can have more than one active job at once. Only ONE
-// simulation may actually move that technician's shared position at a
-// time, or two intervals would fight over the same marker every tick.
-// Tracks which job currently "drives" each technician's dot.
-const drivingTechnician = new Map(); // technicianId -> jobId
-
-async function startSimulation(job, technician, onUpdate) {
-  stopSimulation(job.id);
-
+// Called once, right when a job is assigned to a technician. Computes a
+// real road route from the technician's last known position to the job's
+// location purely so the admin dashboard and the mobile app's tracking
+// screen have a line to draw — the technician's live position itself now
+// comes from their phone, independently of this.
+async function startRoute(job, technician, onUpdate) {
   const startLat = technician.latitude;
   const startLng = technician.longitude;
 
@@ -45,52 +35,7 @@ async function startSimulation(job, technician, onUpdate) {
     [job.latitude, job.longitude],
   ];
   await repo.jobs.setRoutePathAndEnRoute(job.id, routePath);
-
-  // If this technician already has another active job driving their
-  // marker, this job still gets a real route (so its own tracking-modal
-  // polyline is correct) and still progresses to Arrived on the same
-  // timer — it just doesn't also move the shared dot while someone else's
-  // simulation already is.
-  const isDriving = !drivingTechnician.has(technician.id);
-  if (isDriving) drivingTechnician.set(technician.id, job.id);
-
-  let step = 0;
-  const interval = setInterval(async () => {
-    step += 1;
-    const progress = Math.min(step / TOTAL_STEPS, 1);
-
-    if (isDriving) {
-      const point = pointAlongPath(routePath, progress);
-      await repo.technicians.setPosition(technician.id, {
-        latitude: point.latitude,
-        longitude: point.longitude,
-        heading: point.heading,
-      });
-    }
-
-    if (progress >= 1) {
-      await repo.jobs.setArrived(job.id); // sets status='Arrived' and arrivedAt=now(), used for the response-time metric in /api/reports
-      clearInterval(interval);
-      running.delete(job.id);
-      if (isDriving && drivingTechnician.get(technician.id) === job.id) {
-        drivingTechnician.delete(technician.id);
-      }
-    }
-    onUpdate();
-  }, TICK_MS);
-
-  running.set(job.id, interval);
+  onUpdate();
 }
 
-function stopSimulation(jobId) {
-  const interval = running.get(jobId);
-  if (interval) {
-    clearInterval(interval);
-    running.delete(jobId);
-  }
-  for (const [techId, drivingJobId] of drivingTechnician.entries()) {
-    if (drivingJobId === jobId) drivingTechnician.delete(techId);
-  }
-}
-
-module.exports = { startSimulation, stopSimulation };
+module.exports = { startRoute };

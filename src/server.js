@@ -9,7 +9,7 @@ const bcrypt = require('bcryptjs');
 const { Server } = require('socket.io');
 
 const repo = require('../db/repo');
-const { startSimulation, stopSimulation } = require('./simulate');
+const { startRoute } = require('./simulate');
 const { geocodeSearch } = require('./routing');
 const payments = require('./payments');
 const { issueToken, requireCustomerAuth, requireTechnicianAuth } = require('./clientAuth');
@@ -389,6 +389,36 @@ app.get('/api/technicians/:id/jobs', requireTechnicianAuth, async (req, res) => 
   const technician = await repo.technicians.getById(req.params.id);
   if (!technician) return res.status(404).json({ error: 'Technician not found' });
   res.json(await repo.jobs.listByTechnician(technician.id));
+});
+
+// Real live tracking — the technician's own phone calls this periodically
+// (every few seconds, only while they have an active En Route job open;
+// see TrackingContext.js in the mobile app) while it has a location fix.
+// Replaces the old simulate.js timer-walk entirely: this is the ONLY thing
+// that moves a technician's dot on the map now. Heading is optional —
+// expo-location doesn't always have a compass reading (e.g. standing
+// still), so the marker just keeps its last known heading in that case.
+app.post('/api/technicians/:id/location', requireTechnicianAuth, async (req, res) => {
+  if (req.params.id !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this technician account.' });
+  }
+  const { latitude, longitude, heading } = req.body || {};
+  if (latitude == null || longitude == null) {
+    return res.status(400).json({ error: 'latitude and longitude are required' });
+  }
+  const technician = await repo.technicians.getById(req.params.id);
+  if (!technician) return res.status(404).json({ error: 'Technician not found' });
+
+  await repo.technicians.setPosition(technician.id, {
+    latitude: Number(latitude),
+    longitude: Number(longitude),
+    // Keep the last known heading rather than snapping to 0 when the phone
+    // doesn't report one this tick — a sudden "facing north" jump on the
+    // map would look like a glitch, not a missing reading.
+    heading: heading != null ? Number(heading) : (technician.heading ?? null),
+  });
+  await broadcastState();
+  res.json({ ok: true });
 });
 
 // Local-calendar-day key for a millis timestamp. Server and admin/technician
@@ -971,7 +1001,7 @@ async function assignJobToTechnician(jobId, technician) {
   await repo.technicians.recomputeStatus(technician.id);
   const updatedTechnician = await repo.technicians.getById(technician.id);
   await broadcastState();
-  startSimulation(job, updatedTechnician, broadcastState); // begins moving technician toward the job's charger location
+  startRoute(job, updatedTechnician, broadcastState); // computes the road route for the map line; real position now comes from the technician's own phone
   return { job, technician: updatedTechnician };
 }
 
@@ -988,7 +1018,6 @@ app.post('/api/jobs/:id/assign', requireAuth, async (req, res) => {
 // technician-facing one further down.
 async function setJobStatus(job, status) {
   const updated = await repo.jobs.setStatus(job.id, status);
-  if (status === 'Completed') stopSimulation(job.id);
   if (job.technicianId) await repo.technicians.recomputeStatus(job.technicianId);
   await broadcastState();
   return updated;
