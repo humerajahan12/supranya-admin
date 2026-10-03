@@ -18,6 +18,20 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+// Throttle for the route-line recompute in POST /api/technicians/:id/location
+// below — jobId -> ms timestamp of the last recompute. Plain in-memory Map
+// is fine here: losing it on a restart just means the next ping recomputes
+// immediately, no real consequence either way.
+const ROUTE_RECOMPUTE_THROTTLE_MS = 25000;
+const lastRouteRecomputeAt = new Map();
+function shouldRecomputeRoute(jobId) {
+  const now = Date.now();
+  const last = lastRouteRecomputeAt.get(jobId) || 0;
+  if (now - last < ROUTE_RECOMPUTE_THROTTLE_MS) return false;
+  lastRouteRecomputeAt.set(jobId, now);
+  return true;
+}
+
 if (!process.env.SESSION_SECRET) {
   throw new Error('SESSION_SECRET is not set. Copy .env.example to .env and fill in a real random secret before starting the server.');
 }
@@ -424,11 +438,19 @@ app.post('/api/technicians/:id/location', requireTechnicianAuth, async (req, res
   // instead of walking that fixed line, the two would drift apart (the
   // dot going wherever the technician actually drives, the line staying
   // frozen at the original snapshot) unless the line is recomputed here
-  // too, on every real position update for whichever job is currently En
-  // Route. Only ever one such job at a time per technician in practice.
+  // too. Only ever one such job at a time per technician in practice.
+  //
+  // THROTTLED deliberately: the phone pings every ~8s, but re-fetching a
+  // road route doesn't need to happen that often, and every call here
+  // hits an outside routing service (OSRM's free public demo server right
+  // now — this whole project is flagged to move off that before 100-150
+  // technicians go live, see README). Recomputing at most once every 25s
+  // per job cuts that outside call volume by ~3x for free, and will do
+  // the same for whatever paid routing API replaces OSRM later, so it's
+  // worth keeping regardless of provider.
   const activeJobs = await repo.jobs.listByTechnician(technician.id);
   const enRouteJob = activeJobs.find((j) => j.status === 'En Route');
-  if (enRouteJob) {
+  if (enRouteJob && shouldRecomputeRoute(enRouteJob.id)) {
     const roadPath = await fetchRoadRoute(Number(latitude), Number(longitude), enRouteJob.latitude, enRouteJob.longitude);
     const routePath = roadPath || [
       [Number(latitude), Number(longitude)],
@@ -1039,6 +1061,7 @@ app.post('/api/jobs/:id/assign', requireAuth, async (req, res) => {
 async function setJobStatus(job, status) {
   const updated = await repo.jobs.setStatus(job.id, status);
   if (job.technicianId) await repo.technicians.recomputeStatus(job.technicianId);
+  if (status === 'Completed') lastRouteRecomputeAt.delete(job.id); // stop tracking a throttle entry for a job that's done
   await broadcastState();
   return updated;
 }

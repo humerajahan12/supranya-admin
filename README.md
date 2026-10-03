@@ -907,6 +907,35 @@ has to happen *first*, before Razorpay, rather than after it.
    LAN-IP placeholder. (Already done for this deployment.)
 7. **App store submission paperwork.**
 
+## Live tracking is real now — but the routing provider has to change before ~100-150 technicians go live
+
+`simulate.js` used to fake technician movement with a server-side timer
+walking a fixed route. That's gone: the technician's own phone now reports
+real GPS to `POST /api/technicians/:id/location` (foreground-only — see
+`TrackingContext.js` in the mobile app), and that's the only thing that
+moves a technician's dot on the map.
+
+**The one thing NOT yet fixed**: the road route (the green line, and
+travel-time accuracy) still comes from `src/routing.js`'s `fetchRoadRoute`,
+which calls OSRM's free public demo server — a shared community resource
+with no API key, explicitly not meant for production/sustained traffic.
+It's throttled server-side to recompute at most once every 25 seconds per
+active job (`ROUTE_RECOMPUTE_THROTTLE_MS` in `server.js`), which is enough
+to keep today's testing well-behaved, but at the real target of 100-150
+technicians potentially en route simultaneously, this WILL start failing —
+not a hypothetical, a near-certainty at that request volume. Same caveat
+applies to `geocodeSearch` (address search, via Nominatim) in the same
+file, though that's dispatcher-driven and much lower volume, so lower
+priority.
+
+**Before running the real build with real technicians at scale**, swap
+`fetchRoadRoute` to a production routing provider — Google Directions API
+(same billing account as the Maps key already in use; ballpark $5 per
+1,000 requests after a 10,000/month free allowance, confirmed as of this
+writing) is the straightforward option, since the groundwork is already
+in place. Self-hosting OSRM is the free alternative, at the cost of real
+infra work (a Docker container + a road-data extract to maintain).
+
 ## Connecting the mobile app (supranya-charge-app)
 
 The mobile app's phone/OTP screen and Register a Charger screen already
