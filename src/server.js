@@ -186,6 +186,44 @@ app.patch('/api/customers/:id/devices/:deviceId', requireAuth, async (req, res) 
   res.json(updated);
 });
 
+// The customer's own app changing where THEIR charger is (the admin PATCH
+// above is for staff corrections). Same ownership rule as everything else
+// customer-scoped: the token's subject must be this :id, and the device must
+// belong to that customer (getById already scopes by customer_id).
+app.patch('/api/customers/:id/devices/:deviceId/location', requireCustomerAuth, async (req, res) => {
+  if (req.params.id !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this customer account.' });
+  }
+  const device = await repo.devices.getById(req.params.id, req.params.deviceId);
+  if (!device) return res.status(404).json({ error: 'Device not found' });
+
+  const { latitude, longitude } = req.body || {};
+  const lat = Number(latitude);
+  const lon = Number(longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    return res.status(400).json({ error: 'A valid latitude and longitude are required' });
+  }
+  const updated = await repo.devices.setLocation(req.params.deviceId, lat, lon);
+
+  await broadcastState();
+  res.json(updated);
+});
+
+// Address search for the customer app's "type an address, then pin it"
+// screens. /api/geocode further down is admin-only; this is the same lookup
+// behind a customer token. Backed by the public Nominatim server, which has
+// a strict ~1 request/second policy and isn't meant for production volume —
+// the app debounces typing, but swap this for a paid geocoder (e.g. Google
+// Places) at the same time as the OSRM routing swap before launch.
+app.get('/api/customers/:id/geocode', requireCustomerAuth, async (req, res) => {
+  if (req.params.id !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this customer account.' });
+  }
+  const q = (req.query.q || '').trim();
+  if (q.length < 3) return res.json([]);
+  res.json(await geocodeSearch(q.slice(0, 200)));
+});
+
 // A customer's own address book — same pattern as devices above: public
 // (the customer app isn't an admin session), scoped to that customerId.
 // The first address a customer adds is automatically their default; a
