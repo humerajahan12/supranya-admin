@@ -307,9 +307,32 @@ const addresses = {
 const JOB_COLUMNS = `id, subject, service_name, customer_id, customer_name, customer_phone, charger_nickname,
   latitude, longitude, status, technician_id, assigned_at, arrived_at, completed_at, delay_alerted, route_path`;
 
+// Work that needs attention comes first: Unassigned, then Assigned, En Route,
+// Arrived, and Completed last. Within a group the newest comes first.
+// Unassigned jobs have no assigned_at yet (that's what the old
+// "assigned_at DESC NULLS LAST" pushed to the bottom), so the final id DESC
+// tiebreak orders them newest-first — job ids are TKT-<creation time in ms>.
+const JOB_ORDER = `ORDER BY CASE status
+    WHEN 'Unassigned' THEN 0 WHEN 'Assigned' THEN 1 WHEN 'En Route' THEN 2 WHEN 'Arrived' THEN 3 ELSE 4 END,
+  assigned_at DESC NULLS LAST, id DESC`;
+
+// One page of jobs for a where-clause, plus the total and how many of them
+// are still active (anything not Completed) — used by the mobile app lists.
+async function pagedJobs(where, params, page, pageSize) {
+  const totals = await pool.query(
+    `SELECT count(*)::int AS total, count(*) FILTER (WHERE status <> 'Completed')::int AS active FROM jobs ${where}`,
+    params
+  );
+  const { rows } = await pool.query(
+    `SELECT ${JOB_COLUMNS} FROM jobs ${where} ${JOB_ORDER} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, pageSize, (page - 1) * pageSize]
+  );
+  return { jobs: rows.map(mapJob), total: totals.rows[0].total, active: totals.rows[0].active };
+}
+
 const jobs = {
   async list() {
-    const { rows } = await pool.query(`SELECT ${JOB_COLUMNS} FROM jobs ORDER BY assigned_at DESC NULLS LAST`);
+    const { rows } = await pool.query(`SELECT ${JOB_COLUMNS} FROM jobs ${JOB_ORDER}`);
     return rows.map(mapJob);
   },
   async getById(id) {
@@ -317,17 +340,23 @@ const jobs = {
     return mapJob(rows[0]);
   },
   async listByTechnician(technicianId) {
-    const { rows } = await pool.query(`SELECT ${JOB_COLUMNS} FROM jobs WHERE technician_id = $1 ORDER BY assigned_at DESC NULLS LAST`, [
+    const { rows } = await pool.query(`SELECT ${JOB_COLUMNS} FROM jobs WHERE technician_id = $1 ${JOB_ORDER}`, [
       technicianId,
     ]);
     return rows.map(mapJob);
   },
+  async listByTechnicianPaged(technicianId, page, pageSize) {
+    return pagedJobs('WHERE technician_id = $1', [technicianId], page, pageSize);
+  },
   async listByCustomer(customerId, customerPhone) {
     const { rows } = await pool.query(
-      `SELECT ${JOB_COLUMNS} FROM jobs WHERE customer_id = $1 OR customer_phone = $2 ORDER BY assigned_at DESC NULLS LAST`,
+      `SELECT ${JOB_COLUMNS} FROM jobs WHERE customer_id = $1 OR customer_phone = $2 ${JOB_ORDER}`,
       [customerId, customerPhone]
     );
     return rows.map(mapJob);
+  },
+  async listByCustomerPaged(customerId, customerPhone, page, pageSize) {
+    return pagedJobs('WHERE customer_id = $1 OR customer_phone = $2', [customerId, customerPhone], page, pageSize);
   },
   async create({ id, subject, serviceName, customerId, customerName, customerPhone, chargerNickname, latitude, longitude }) {
     const { rows } = await pool.query(
@@ -390,7 +419,7 @@ const jobs = {
 
     params.push(pageSize, (page - 1) * pageSize);
     const { rows } = await pool.query(
-      `SELECT ${JOB_COLUMNS} FROM jobs ${where} ORDER BY assigned_at DESC NULLS LAST LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      `SELECT ${JOB_COLUMNS} FROM jobs ${where} ${JOB_ORDER} LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     );
     return { jobs: rows.map(mapJob), total };

@@ -416,9 +416,20 @@ app.get('/api/customers/:id/tickets', requireCustomerAuth, async (req, res) => {
   }
   const customer = await repo.customers.getById(req.params.id);
   if (!customer) return res.status(404).json({ error: 'Customer not found' });
-  const mine = await repo.jobs.listByCustomer(customer.id, customer.phone);
   const techNameById = await technicianNameMap();
-  res.json(mine.map((j) => ({ ...j, technicianName: j.technicianId ? techNameById[j.technicianId] || j.technicianId : null })));
+  const withTech = (j) => ({ ...j, technicianName: j.technicianId ? techNameById[j.technicianId] || j.technicianId : null });
+
+  // No page param = the full list as a plain array, which is what apps
+  // installed before pagination existed still expect. With ?page= it returns
+  // one page: { tickets, total, active, page, pageSize }.
+  if (req.query.page !== undefined) {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(50, Math.max(1, parseInt(req.query.pageSize, 10) || 10));
+    const result = await repo.jobs.listByCustomerPaged(customer.id, customer.phone, page, pageSize);
+    return res.json({ tickets: result.jobs.map(withTech), total: result.total, active: result.active, page, pageSize });
+  }
+  const mine = await repo.jobs.listByCustomer(customer.id, customer.phone);
+  res.json(mine.map(withTech));
 });
 
 // --- Technician mobile app login + job list. ------------------------------
@@ -440,6 +451,16 @@ app.get('/api/technicians/:id/jobs', requireTechnicianAuth, async (req, res) => 
   }
   const technician = await repo.technicians.getById(req.params.id);
   if (!technician) return res.status(404).json({ error: 'Technician not found' });
+
+  // No page param = the full list as a plain array (the live-tracking check
+  // in the app and older installed apps rely on this). With ?page= it
+  // returns one page: { jobs, total, active, page, pageSize }.
+  if (req.query.page !== undefined) {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(50, Math.max(1, parseInt(req.query.pageSize, 10) || 10));
+    const result = await repo.jobs.listByTechnicianPaged(technician.id, page, pageSize);
+    return res.json({ jobs: result.jobs, total: result.total, active: result.active, page, pageSize });
+  }
   res.json(await repo.jobs.listByTechnician(technician.id));
 });
 
