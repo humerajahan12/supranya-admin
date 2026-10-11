@@ -131,3 +131,44 @@ CREATE TABLE IF NOT EXISTS admin_users (
   username      TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL
 );
+
+-- One-time login codes. Only a hash of the code is stored. A new request for
+-- the same phone+role replaces the old row; rows are cheap and cleaned up
+-- opportunistically (see src/otp.js).
+CREATE TABLE IF NOT EXISTS otp_codes (
+  id          BIGSERIAL PRIMARY KEY,
+  phone       TEXT NOT NULL,
+  role        TEXT NOT NULL,
+  code_hash   TEXT NOT NULL,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_otp_phone_role ON otp_codes (phone, role, created_at DESC);
+
+-- ---- PIN login (replaces SMS OTP as the primary login) ---------------------
+-- pin_hash is a bcrypt hash, never the PIN. token_version is bumped on every
+-- PIN set/reset/change so all older login tokens stop working at once.
+ALTER TABLE customers   ADD COLUMN IF NOT EXISTS pin_hash TEXT;
+ALTER TABLE customers   ADD COLUMN IF NOT EXISTS pin_must_change BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE customers   ADD COLUMN IF NOT EXISTS pin_failed_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE customers   ADD COLUMN IF NOT EXISTS pin_locked_until TIMESTAMPTZ;
+ALTER TABLE customers   ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE customers   ADD COLUMN IF NOT EXISTS phone_verified BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE technicians ADD COLUMN IF NOT EXISTS pin_hash TEXT;
+ALTER TABLE technicians ADD COLUMN IF NOT EXISTS pin_must_change BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE technicians ADD COLUMN IF NOT EXISTS pin_failed_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE technicians ADD COLUMN IF NOT EXISTS pin_locked_until TIMESTAMPTZ;
+ALTER TABLE technicians ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0;
+
+-- Who did what to whose PIN. Append-only.
+CREATE TABLE IF NOT EXISTS pin_audit (
+  id           BIGSERIAL PRIMARY KEY,
+  actor        TEXT NOT NULL,       -- admin username, or 'self' / 'system'
+  account_role TEXT NOT NULL,       -- customer | technician
+  account_id   TEXT NOT NULL,
+  action       TEXT NOT NULL,       -- set | unlock | verify | change | locked | signup
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_pin_audit_account ON pin_audit (account_role, account_id, created_at DESC);

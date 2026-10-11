@@ -4,7 +4,7 @@
 // key needed. This is a shared community server, not something to hammer
 // in production: for real use, self-host OSRM (or swap in Google/Mapbox
 // Directions) rather than pointing production traffic at this URL.
-const OSRM_BASE_URL = 'https://router.project-osrm.org';
+const OSRM_BASE_URL = process.env.OSRM_BASE_URL || 'https://router.project-osrm.org';
 
 // Free geocoding (type-to-search-a-location, Uber/Ola style) via OSM's
 // Nominatim — also no API key, same reasoning as OSRM above: it's a shared
@@ -12,7 +12,7 @@ const OSRM_BASE_URL = 'https://router.project-osrm.org';
 // User-Agent identifying the app, results not cached/resold) — fine for
 // this admin's own low-volume internal use, not for production-scale
 // traffic. Self-host Nominatim or swap in Google/Mapbox Geocoding for that.
-const NOMINATIM_BASE_URL = 'https://nominatim.openstreetmap.org';
+const NOMINATIM_BASE_URL = process.env.NOMINATIM_BASE_URL || 'https://nominatim.openstreetmap.org';
 
 async function geocodeSearch(query) {
   try {

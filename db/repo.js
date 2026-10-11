@@ -24,6 +24,8 @@ function mapTechnician(r) {
     longitude: r.longitude,
   };
   if (r.heading != null) t.heading = r.heading;
+  t.hasPin = !!r.pin_hash; // never the hash itself
+  t.pinLocked = !!(r.pin_locked_until && new Date(r.pin_locked_until).getTime() > Date.now());
   return t;
 }
 
@@ -59,6 +61,9 @@ function mapCustomer(r, devices = [], addresses = []) {
     phone: r.phone,
     status: r.status,
     registeredAt: ms(r.registered_at),
+    hasPin: !!r.pin_hash, // never the hash itself
+    pinLocked: !!(r.pin_locked_until && new Date(r.pin_locked_until).getTime() > Date.now()),
+    phoneVerified: !!r.phone_verified,
     devices: devices.map(mapDevice),
     addresses: addresses.map(mapAddress),
   };
@@ -345,6 +350,13 @@ const jobs = {
     ]);
     return rows.map(mapJob);
   },
+  async getEnRouteForTechnician(technicianId) {
+    const { rows } = await pool.query(
+      `SELECT ${JOB_COLUMNS} FROM jobs WHERE technician_id = $1 AND status = 'En Route' LIMIT 1`,
+      [technicianId]
+    );
+    return mapJob(rows[0]);
+  },
   async listByTechnicianPaged(technicianId, page, pageSize) {
     return pagedJobs('WHERE technician_id = $1', [technicianId], page, pageSize);
   },
@@ -619,4 +631,82 @@ const adminUsers = {
   },
 };
 
-module.exports = { technicians, customers, devices, addresses, jobs, attendance, leave, alerts, adminUsers };
+// --- PIN login storage. `role` is whitelisted to a table name, never user text.
+const ACCOUNT_TABLE = { customer: 'customers', technician: 'technicians' };
+function tableFor(role) {
+  const t = ACCOUNT_TABLE[role];
+  if (!t) throw new Error(`bad role ${role}`);
+  return t;
+}
+
+const accounts = {
+  // Raw row INCLUDING pin_hash — only for src/pin.js, never sent to clients.
+  async getAuthByPhone(role, phone) {
+    const { rows } = await pool.query(`SELECT * FROM ${tableFor(role)} WHERE phone = $1`, [phone]);
+    return rows[0] || null;
+  },
+  async getAuthById(role, id) {
+    const { rows } = await pool.query(`SELECT * FROM ${tableFor(role)} WHERE id = $1`, [id]);
+    return rows[0] || null;
+  },
+  // Lightweight check used on every authenticated request.
+  async getTokenState(role, id) {
+    const { rows } = await pool.query(`SELECT token_version FROM ${tableFor(role)} WHERE id = $1`, [id]);
+    return rows[0] ? { version: rows[0].token_version } : null;
+  },
+  async setPin(role, id, pinHash, mustChange) {
+    const { rows } = await pool.query(
+      `UPDATE ${tableFor(role)}
+         SET pin_hash = $1, pin_must_change = $2, pin_failed_attempts = 0, pin_locked_until = NULL,
+             token_version = token_version + 1
+       WHERE id = $3 RETURNING token_version`,
+      [pinHash, mustChange, id]
+    );
+    return rows[0] ? rows[0].token_version : null;
+  },
+  async recordFailure(role, id, maxAttempts, lockMs) {
+    const { rows } = await pool.query(
+      `UPDATE ${tableFor(role)}
+         SET pin_failed_attempts = CASE WHEN pin_failed_attempts + 1 >= $2 THEN 0 ELSE pin_failed_attempts + 1 END,
+             pin_locked_until = CASE WHEN pin_failed_attempts + 1 >= $2 THEN now() + $3 * interval '1 millisecond' ELSE pin_locked_until END
+       WHERE id = $1 RETURNING pin_failed_attempts, pin_locked_until`,
+      [id, maxAttempts, lockMs]
+    );
+    return rows[0];
+  },
+  async recordSuccess(role, id) {
+    await pool.query(`UPDATE ${tableFor(role)} SET pin_failed_attempts = 0, pin_locked_until = NULL WHERE id = $1`, [id]);
+  },
+  async unlock(role, id) {
+    await pool.query(`UPDATE ${tableFor(role)} SET pin_failed_attempts = 0, pin_locked_until = NULL WHERE id = $1`, [id]);
+  },
+  async setPhoneVerified(id, verified) {
+    await pool.query('UPDATE customers SET phone_verified = $1 WHERE id = $2', [!!verified, id]);
+  },
+  async createCustomerWithPin({ id, name, phone, pinHash }) {
+    const { rows } = await pool.query(
+      `INSERT INTO customers (id, name, phone, status, registered_at, pin_hash) VALUES ($1, $2, $3, 'active', now(), $4) RETURNING *`,
+      [id, name, phone, pinHash]
+    );
+    return rows[0];
+  },
+  async countOpenJobsForCustomer(customerId) {
+    const { rows } = await pool.query(`SELECT count(*)::int AS n FROM jobs WHERE customer_id = $1 AND status <> 'Completed'`, [customerId]);
+    return rows[0].n;
+  },
+};
+
+const pinAudit = {
+  async add(actor, role, accountId, action) {
+    await pool.query('INSERT INTO pin_audit (actor, account_role, account_id, action) VALUES ($1, $2, $3, $4)', [actor, role, accountId, action]);
+  },
+  async list(role, accountId, limit = 20) {
+    const { rows } = await pool.query(
+      'SELECT actor, action, created_at FROM pin_audit WHERE account_role = $1 AND account_id = $2 ORDER BY created_at DESC LIMIT $3',
+      [role, accountId, limit]
+    );
+    return rows.map((r) => ({ actor: r.actor, action: r.action, at: ms(r.created_at) }));
+  },
+};
+
+module.exports = { accounts, pinAudit, technicians, customers, devices, addresses, jobs, attendance, leave, alerts, adminUsers };

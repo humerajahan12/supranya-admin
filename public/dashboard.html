@@ -968,6 +968,8 @@
           <div style="color:var(--faint); font-size:11px; text-align:right;">
             ${t.status.replace('_', ' ')}${refJob ? `<br/>${t.km.toFixed(1)} km` : ''}
           </div>
+          <button class="delete-tech-btn" title="${t.hasPin ? 'Reset PIN' : 'Set PIN (not activated yet)'}" style="${t.hasPin ? '' : 'background:#fff3cd;'}" onclick="adminSetPin('technicians', '${t.id}', '${t.name.replace(/'/g, "\\'")}')">🔑</button>
+          ${t.pinLocked ? `<button class="delete-tech-btn" title="Locked — click to unlock" onclick="adminUnlock('technicians', '${t.id}')">🔓</button>` : ''}
           <button class="delete-tech-btn" title="Edit technician" onclick="openTechEdit('${t.id}')">✎</button>
           <button class="delete-tech-btn" title="Delete technician" onclick="deleteTechnician('${t.id}', '${t.name.replace(/'/g, "\\'")}')">🗑</button>
         </div>`).join('') : '<div class="no-devices">No technicians match your search</div>';
@@ -988,6 +990,31 @@
         applyRiderRotation(techMapMarkers[t.id], t.status === 'on_job' ? t.heading : null);
         techMapMarkers[t.id].bindPopup(`${t.name}<br/>${t.vehicle}<br/>${t.phone}<br/>${t.status.replace('_', ' ')}`);
       });
+    }
+
+    // --- PIN tools -------------------------------------------------------------
+    // Rule for support: never reset on an inbound message alone. Call the
+    // registered number back (or ask for something only the owner knows)
+    // before you click Reset PIN. Every action here is logged.
+    async function adminSetPin(kind, id, name) {
+      if (!confirm(`Create a temporary PIN for ${name}?\n\nIf they already have a PIN it stops working and they are signed out everywhere.\nHave you verified it is really them (callback to their registered number)?`)) return;
+      const res = await fetch(`/api/admin/${kind}/${id}/pin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return alert(data.error || 'Could not set PIN');
+      alert(`Temporary PIN for ${name}:\n\n        ${data.pin}\n\nTell them this PIN privately (phone call). They will be asked to choose their own PIN at first login. This is the only time it is shown.`);
+      if (kind === 'customers' && typeof loadCustomers === 'function') loadCustomers();
+    }
+
+    async function adminUnlock(kind, id) {
+      const res = await fetch(`/api/admin/${kind}/${id}/unlock`, { method: 'POST' });
+      if (!res.ok) return alert('Could not unlock');
+      if (kind === 'customers' && typeof loadCustomers === 'function') loadCustomers();
+    }
+
+    async function adminVerify(id, verified) {
+      const res = await fetch(`/api/admin/customers/${id}/verify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ verified }) });
+      if (!res.ok) return alert('Could not update');
+      if (typeof loadCustomers === 'function') loadCustomers();
     }
 
     // --- Delete technician ---------------------------------------------------
@@ -1564,6 +1591,15 @@
           </div>`).join('') : '<div class="no-devices">No devices registered yet</div>'}
 
         ${customerEditMode ? '' : `
+          <div style="font-size:12px; color:var(--faint); margin:14px 0 6px;">
+            Login: ${c.hasPin ? 'PIN set' : '<b style="color:#b45309;">not activated</b>'}${c.pinLocked ? ' · <b style="color:#b91c1c;">locked</b>' : ''}
+            · Phone: ${c.phoneVerified ? '<b style="color:#166534;">verified</b>' : '<b style="color:#b45309;">unverified</b>'}
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="toggle-status-btn" style="margin-top:0;" onclick="adminSetPin('customers', '${c.id}', '${c.name.replace(/'/g, "\\'")}')">${c.hasPin ? 'Reset PIN' : 'Activate (set PIN)'}</button>
+            ${c.pinLocked ? `<button class="toggle-status-btn" style="margin-top:0;" onclick="adminUnlock('customers', '${c.id}')">Unlock</button>` : ''}
+            <button class="toggle-status-btn" style="margin-top:0;" onclick="adminVerify('${c.id}', ${!c.phoneVerified})">${c.phoneVerified ? 'Mark unverified' : 'Mark phone verified'}</button>
+          </div>
           <button class="toggle-status-btn" onclick="toggleCustomerStatus('${c.id}', '${c.status === 'active' ? 'inactive' : 'active'}')">
             Mark as ${c.status === 'active' ? 'Inactive' : 'Active'}
           </button>

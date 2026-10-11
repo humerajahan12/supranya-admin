@@ -12,7 +12,9 @@ const repo = require('../db/repo');
 const { startRoute } = require('./simulate');
 const { geocodeSearch, fetchRoadRoute } = require('./routing');
 const payments = require('./payments');
-const { issueToken, requireCustomerAuth, requireTechnicianAuth } = require('./clientAuth');
+const { issueToken, invalidate, requireCustomerAuth, requireTechnicianAuth, requireAnyAccount, requireAnyAccountForPinChange } = require('./clientAuth');
+const { requestOtp, verifyOtp } = require('./otp');
+const pin = require('./pin');
 
 const app = express();
 const server = http.createServer(app);
@@ -37,6 +39,21 @@ if (!process.env.SESSION_SECRET) {
 }
 if (!process.env.AUTH_TOKEN_SECRET) {
   throw new Error('AUTH_TOKEN_SECRET is not set. Add a second, separate random secret to .env — this one signs the mobile app\'s customer/technician login tokens.');
+}
+
+app.set('trust proxy', 1); // Render sits behind a proxy; needed so req.ip is the real client
+
+// Tiny in-memory per-IP limiter for the unauthenticated endpoints (OTP,
+// phone lookup). One server instance, so memory is enough.
+function rateLimit(maxPerMinute) {
+  const hits = new Map();
+  setInterval(() => hits.clear(), 60 * 1000).unref();
+  return (req, res, next) => {
+    const n = (hits.get(req.ip) || 0) + 1;
+    hits.set(req.ip, n);
+    if (n > maxPerMinute) return res.status(429).json({ error: 'Too many requests. Please wait a minute.' });
+    next();
+  };
 }
 
 app.use(express.json());
@@ -90,12 +107,13 @@ function requireAuth(req, res, next) {
   return res.status(401).json({ error: 'Not authenticated' });
 }
 
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', rateLimit(10), async (req, res) => {
   const { username, password } = req.body || {};
   const account = username ? await repo.adminUsers.findByUsername(username) : null;
   const ok = account && (await bcrypt.compare(password || '', account.password_hash));
   if (!ok) return res.status(401).json({ error: 'Invalid username or password' });
   req.session.isAdmin = true;
+  req.session.username = account.username;
   res.json({ ok: true });
 });
 
@@ -112,14 +130,210 @@ app.get('/api/session', (req, res) => {
 // customer's own OTP-verified session token), but it must NOT require the
 // admin password, since the mobile app calling it is never logged in as
 // admin. ---------------------------------------------------------------
-app.get('/api/customers/by-phone', async (req, res) => {
+// Pre-login "is this number already registered?" check, used only to decide
+// whether to ask a new customer for their name. Returns existence ONLY —
+// never the customer's name or any other data (it is unauthenticated).
+app.get('/api/customers/by-phone', rateLimit(20), async (req, res) => {
   const phone = (req.query.phone || '').trim();
-  const customer = await repo.customers.getByPhone(phone);
-  if (!customer) return res.status(404).json({ error: 'No customer found for this phone number' });
-  res.json(customer);
+  const row = await repo.accounts.getAuthByPhone('customer', phone);
+  if (!row) return res.status(404).json({ error: 'No customer found for this phone number' });
+  res.json({ exists: true, hasPin: !!row.pin_hash });
 });
 
-app.post('/api/customers/register', async (req, res) => {
+// --- PIN login (customers and technicians) ---------------------------------
+// This is the primary login. SMS OTP below is kept but OFF unless OTP_ENABLED=true.
+function dailyLimit(max) {
+  const hits = new Map();
+  setInterval(() => hits.clear(), 24 * 60 * 60 * 1000).unref();
+  return (req, res, next) => {
+    const n = (hits.get(req.ip) || 0) + 1;
+    hits.set(req.ip, n);
+    if (n > max) return res.status(429).json({ error: 'Too many sign-ups from this network today. Please contact support.' });
+    next();
+  };
+}
+
+async function loadAccount(role, id) {
+  return role === 'technician' ? repo.technicians.getById(id) : repo.customers.getById(id);
+}
+
+// New customers only. A number that already exists can never be claimed
+// from the app: with a PIN it must log in; without one, admin activates it.
+app.post('/api/auth/pin/signup', rateLimit(10), dailyLimit(15), async (req, res) => {
+  const { phone, name, pin: newPin } = req.body || {};
+  if (!pin.PHONE_RE.test(phone || '')) return res.status(400).json({ error: 'Enter a valid 10-digit mobile number.' });
+  const cleanName = String(name || '').trim().slice(0, 80);
+  if (!cleanName) return res.status(400).json({ error: 'Please enter your name.' });
+  const problem = pin.pinProblem(newPin, phone);
+  if (problem) return res.status(400).json({ error: problem });
+
+  const existing = await repo.accounts.getAuthByPhone('customer', phone);
+  if (existing) {
+    return existing.pin_hash
+      ? res.status(409).json({ code: 'EXISTS', error: 'This number is already registered. Please log in with your PIN.' })
+      : res.status(403).json({ code: 'NO_PIN', error: 'Your account is not activated yet. Please contact support to get your PIN.' });
+  }
+  let row;
+  try {
+    row = await repo.accounts.createCustomerWithPin({ id: `cust-${Date.now()}`, name: cleanName, phone, pinHash: await pin.hashPin(newPin) });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ code: 'EXISTS', error: 'This number is already registered. Please log in with your PIN.' });
+    throw err;
+  }
+  await repo.pinAudit.add('self', 'customer', row.id, 'signup');
+  scheduleBroadcast(500);
+  const customer = await repo.customers.getById(row.id);
+  res.status(201).json({ ...customer, token: issueToken({ sub: row.id, role: 'customer', v: row.token_version }) });
+});
+
+app.post('/api/auth/pin/login', rateLimit(20), async (req, res) => {
+  const { phone, pin: givenPin, role } = req.body || {};
+  if (role !== 'customer' && role !== 'technician') return res.status(400).json({ error: 'role must be customer or technician' });
+  const result = await pin.checkLogin(role, phone, givenPin);
+  if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code });
+  const row = result.row;
+  if (role === 'customer' && row.status === 'inactive') {
+    return res.status(403).json({ error: 'This account is disabled. Please contact support.' });
+  }
+  const account = await loadAccount(role, row.id);
+  res.json({
+    ...account,
+    token: issueToken({ sub: row.id, role, v: row.token_version, mc: row.pin_must_change }),
+    mustChangePin: !!row.pin_must_change,
+  });
+});
+
+// Works with a normal token or a "must change" token (the only thing the
+// latter may do). Returns a fresh token; older sessions are signed out.
+app.post('/api/auth/pin/change', rateLimit(10), requireAnyAccountForPinChange, async (req, res) => {
+  const { currentPin, newPin } = req.body || {};
+  const role = req.authRole;
+  const row = await repo.accounts.getAuthById(role, req.authSub);
+  if (!row || !row.pin_hash) return res.status(404).json({ error: 'Account not found.' });
+  if (row.pin_locked_until && new Date(row.pin_locked_until).getTime() > Date.now()) {
+    return res.status(429).json({ error: 'Too many wrong attempts. Try again later, or contact support.' });
+  }
+  if (!pin.PIN_RE.test(String(currentPin || '')) || !(await require('bcryptjs').compare(String(currentPin), row.pin_hash))) {
+    await repo.accounts.recordFailure(role, row.id, 5, 15 * 60 * 1000);
+    return res.status(401).json({ error: 'Your current PIN is incorrect.' });
+  }
+  const problem = pin.pinProblem(newPin, row.phone);
+  if (problem) return res.status(400).json({ error: problem });
+  if (newPin === currentPin) return res.status(400).json({ error: 'Choose a PIN different from your current one.' });
+  const version = await repo.accounts.setPin(role, row.id, await pin.hashPin(newPin), false);
+  invalidate(role, row.id);
+  await repo.pinAudit.add('self', role, row.id, 'change');
+  res.json({ token: issueToken({ sub: row.id, role, v: version }), account: await loadAccount(role, row.id) });
+});
+
+// Called by the app every time it opens. Confirms the saved login is still
+// valid (account exists, not disabled, PIN not reset since) and hands back a
+// fresh token, so an active user is never asked for their PIN again.
+app.post('/api/auth/refresh', rateLimit(30), requireAnyAccount, async (req, res) => {
+  const role = req.authRole;
+  const row = await repo.accounts.getAuthById(role, req.authSub);
+  if (!row) return res.status(401).json({ error: 'Your session has ended. Please log in again.' });
+  if (role === 'customer' && row.status === 'inactive') return res.status(403).json({ error: 'This account is disabled. Please contact support.' });
+  res.json({ token: issueToken({ sub: row.id, role, v: row.token_version }), account: await loadAccount(role, row.id) });
+});
+
+// --- Admin PIN tools (dashboard) -------------------------------------------
+const adminRole = (req) => (req.params.kind === 'technicians' ? 'technician' : req.params.kind === 'customers' ? 'customer' : null);
+
+// Sets a TEMPORARY PIN (random unless one is supplied). The user must change
+// it at next login, and any existing session of theirs is signed out.
+app.post('/api/admin/:kind/:id/pin', requireAuth, async (req, res) => {
+  const role = adminRole(req);
+  if (!role) return res.status(404).json({ error: 'Not found' });
+  const row = await repo.accounts.getAuthById(role, req.params.id);
+  if (!row) return res.status(404).json({ error: 'Account not found' });
+  const supplied = req.body && req.body.pin;
+  if (supplied) {
+    const problem = pin.pinProblem(String(supplied), row.phone);
+    if (problem) return res.status(400).json({ error: problem });
+  }
+  const newPin = supplied ? String(supplied) : pin.randomPin(row.phone);
+  await repo.accounts.setPin(role, row.id, await pin.hashPin(newPin), true);
+  invalidate(role, row.id);
+  await repo.pinAudit.add((req.session && req.session.username) || 'admin', role, row.id, 'set');
+  scheduleBroadcast(300);
+  res.json({ pin: newPin });
+});
+
+app.post('/api/admin/:kind/:id/unlock', requireAuth, async (req, res) => {
+  const role = adminRole(req);
+  if (!role) return res.status(404).json({ error: 'Not found' });
+  await repo.accounts.unlock(role, req.params.id);
+  await repo.pinAudit.add((req.session && req.session.username) || 'admin', role, req.params.id, 'unlock');
+  scheduleBroadcast(300);
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/customers/:id/verify', requireAuth, async (req, res) => {
+  const verified = !(req.body && req.body.verified === false);
+  await repo.accounts.setPhoneVerified(req.params.id, verified);
+  await repo.pinAudit.add((req.session && req.session.username) || 'admin', 'customer', req.params.id, verified ? 'verify' : 'unverify');
+  res.json({ ok: true });
+});
+
+app.get('/api/admin/:kind/:id/pin-audit', requireAuth, async (req, res) => {
+  const role = adminRole(req);
+  if (!role) return res.status(404).json({ error: 'Not found' });
+  res.json(await repo.pinAudit.list(role, req.params.id));
+});
+
+// --- SMS OTP login (OFF by default) -----------------------------------------
+function otpEnabled(req, res, next) {
+  if (process.env.OTP_ENABLED === 'true') return next();
+  res.status(404).json({ error: 'Not found' });
+}
+app.post('/api/auth/otp/request', otpEnabled, rateLimit(10), async (req, res) => {
+  const { phone, role } = req.body || {};
+  if (role !== 'customer' && role !== 'technician') return res.status(400).json({ error: 'role must be customer or technician' });
+  if (role === 'technician') {
+    // Technicians are provisioned by admin; don't text codes to strangers.
+    const tech = await repo.technicians.getByPhone(phone || '');
+    if (!tech) return res.status(404).json({ error: 'No technician account found for this number. Ask your admin to add you first.' });
+  }
+  const result = await requestOtp(phone || '', role);
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+  res.json({ ok: true, resendInSeconds: result.resendInSeconds });
+});
+
+app.post('/api/auth/otp/verify', otpEnabled, rateLimit(20), async (req, res) => {
+  const { phone, role, code, name } = req.body || {};
+  if (role !== 'customer' && role !== 'technician') return res.status(400).json({ error: 'role must be customer or technician' });
+  const result = await verifyOtp(phone || '', role, code);
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+
+  if (role === 'technician') {
+    const technician = await repo.technicians.getByPhone(phone);
+    if (!technician) return res.status(404).json({ error: 'No technician account found for this number.' });
+    return res.json({ ...technician, token: issueToken({ sub: technician.id, role: 'technician' }) });
+  }
+
+  let customer = await repo.customers.getByPhone(phone);
+  if (!customer) {
+    const cleanName = typeof name === 'string' && name.trim() ? name.trim().slice(0, 80) : 'Customer';
+    customer = await repo.customers.create({ id: `cust-${Date.now()}`, name: cleanName, phone });
+    scheduleBroadcast(500);
+  } else if (name && customer.name === 'Customer') {
+    await repo.customers.setName(customer.id, String(name).trim().slice(0, 80));
+    customer = await repo.customers.getById(customer.id);
+  }
+  res.json({ ...customer, token: issueToken({ sub: customer.id, role: 'customer' }) });
+});
+
+// LEGACY open login (no OTP). Only for apps installed before real OTP
+// shipped. Leave LEGACY_OPEN_LOGIN unset in production: with it on, anyone
+// can mint a login for any phone number.
+const LEGACY_OPEN_LOGIN = process.env.LEGACY_OPEN_LOGIN === 'true';
+function legacyOnly(req, res, next) {
+  if (LEGACY_OPEN_LOGIN) return next();
+  res.status(410).json({ error: 'This app version is out of date. Please update the app to sign in.' });
+}
+
+app.post('/api/customers/register', legacyOnly, async (req, res) => {
   const { phone, name } = req.body || {};
   if (!phone) return res.status(400).json({ error: 'phone is required' });
 
@@ -132,10 +346,6 @@ app.post('/api/customers/register', async (req, res) => {
   }
 
   await broadcastState();
-  // Issued here (right after the OTP step, mocked as it currently is) so
-  // the app has a real token proving "this device is customer X" for every
-  // call it makes afterwards, instead of just trusting whatever id it
-  // sends in the URL.
   res.status(201).json({ ...customer, token: issueToken({ sub: customer.id, role: 'customer' }) });
 });
 
@@ -257,7 +467,7 @@ app.post('/api/customers/:id/addresses', requireCustomerAuth, async (req, res) =
 
 // --- Ticket creation & customer-facing ticket lookup (PUBLIC — called by
 // the customer's phone). ---------------------------------------------------
-app.post('/api/tickets', async (req, res) => {
+app.post('/api/tickets', requireAuth, async (req, res) => {
   const { customerId, customerName, customerPhone, chargerNickname, latitude, longitude, serviceName, subject } = req.body || {};
   if (!customerName || !customerPhone || !chargerNickname || latitude == null || longitude == null || !serviceName) {
     return res.status(400).json({ error: 'customerName, customerPhone, chargerNickname, latitude, longitude and serviceName are required' });
@@ -285,8 +495,17 @@ app.post('/api/tickets', async (req, res) => {
 // regardless of whether any money actually moved.
 
 // PUBLIC — step 1 of booking payment. Body: { serviceId }.
-app.post('/api/payments/order', async (req, res) => {
+app.post('/api/payments/order', requireCustomerAuth, async (req, res) => {
   const { serviceId } = req.body || {};
+  // Phone numbers aren't verified at signup, so until admin marks an account
+  // verified (after a callback), cap how many requests it can have open.
+  const me = await repo.accounts.getAuthById('customer', req.authSub);
+  if (me && !me.phone_verified) {
+    const open = await repo.accounts.countOpenJobsForCustomer(me.id);
+    if (open >= 2) {
+      return res.status(403).json({ error: 'You already have 2 open service requests. Please wait until one is completed, or contact support.' });
+    }
+  }
   try {
     const order = await payments.createOrder({ serviceId });
     res.json(order);
@@ -399,13 +618,12 @@ app.get('/api/customers/:id', requireCustomerAuth, async (req, res) => {
   res.json(customer);
 });
 
-// A single ticket by id — intentionally left PUBLIC (no auth): the app
-// reaches this with just a ticketId it already has (e.g. the confirmation
-// screen right after booking), not a customer login, and a ticket id alone
-// doesn't expose anything beyond that one job's own status.
-app.get('/api/tickets/:id', async (req, res) => {
+// A single ticket by id. Requires a customer login AND that the ticket is
+// theirs — ids are TKT-<timestamp>, trivially guessable, so an open endpoint
+// would expose every customer's name, phone and location.
+app.get('/api/tickets/:id', requireCustomerAuth, async (req, res) => {
   const job = await repo.jobs.getById(req.params.id);
-  if (!job) return res.status(404).json({ error: 'Ticket not found' });
+  if (!job || job.customerId !== req.authSub) return res.status(404).json({ error: 'Ticket not found' });
   const technician = job.technicianId ? await repo.technicians.getById(job.technicianId) : null;
   res.json({ ...job, technicianName: technician ? technician.name : null });
 });
@@ -436,7 +654,7 @@ app.get('/api/customers/:id/tickets', requireCustomerAuth, async (req, res) => {
 // by-phone stays PUBLIC on purpose: it's the pre-login lookup itself (like
 // /api/customers/by-phone above) — there's no token yet at this point, this
 // IS how one gets issued.
-app.get('/api/technicians/by-phone', async (req, res) => {
+app.get('/api/technicians/by-phone', legacyOnly, async (req, res) => {
   const phone = (req.query.phone || '').trim();
   const technician = await repo.technicians.getByPhone(phone);
   if (!technician) return res.status(404).json({ error: 'No technician account found for this phone number' });
@@ -507,8 +725,7 @@ app.post('/api/technicians/:id/location', requireTechnicianAuth, async (req, res
   // per job cuts that outside call volume by ~3x for free, and will do
   // the same for whatever paid routing API replaces OSRM later, so it's
   // worth keeping regardless of provider.
-  const activeJobs = await repo.jobs.listByTechnician(technician.id);
-  const enRouteJob = activeJobs.find((j) => j.status === 'En Route');
+  const enRouteJob = await repo.jobs.getEnRouteForTechnician(technician.id);
   if (enRouteJob && shouldRecomputeRoute(enRouteJob.id)) {
     const roadPath = await fetchRoadRoute(Number(latitude), Number(longitude), enRouteJob.latitude, enRouteJob.longitude);
     const routePath = roadPath || [
@@ -518,7 +735,7 @@ app.post('/api/technicians/:id/location', requireTechnicianAuth, async (req, res
     await repo.jobs.setRoutePathAndEnRoute(enRouteJob.id, routePath);
   }
 
-  await broadcastState();
+  scheduleBroadcast(); // coalesced: dozens of phones pinging must not each trigger a full reload
   res.json({ ok: true });
 });
 
@@ -1194,6 +1411,15 @@ setInterval(async () => {
 // devices+addresses join for every customer on every single broadcast,
 // which fires on every job/technician/attendance/leave change and every
 // 2 seconds during a live simulation tick.
+let broadcastTimer = null;
+function scheduleBroadcast(delayMs = 1500) {
+  if (broadcastTimer) return;
+  broadcastTimer = setTimeout(() => {
+    broadcastTimer = null;
+    broadcastState().catch((err) => console.error('broadcast failed:', err.message));
+  }, delayMs);
+}
+
 async function broadcastState() {
   const [jobs, technicians, alerts] = await Promise.all([repo.jobs.list(), repo.technicians.list(), repo.alerts.list()]);
   io.emit('state', { jobs, technicians, alerts });
