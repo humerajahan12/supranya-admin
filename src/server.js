@@ -249,6 +249,32 @@ app.post('/api/auth/refresh', rateLimit(30), requireAnyAccount, async (req, res)
   res.json({ token: issueToken({ sub: row.id, role, v: row.token_version }), account: await loadAccount(role, row.id) });
 });
 
+// Customer deletes their own account (required by Google Play for apps that
+// let people sign up). Needs the PIN again so a borrowed unlocked phone can't
+// wipe someone's account. Blocked while a service request is still open.
+app.post('/api/customers/:id/delete-account', rateLimit(10), requireCustomerAuth, async (req, res) => {
+  if (req.params.id !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this customer account.' });
+  }
+  const row = await repo.accounts.getAuthById('customer', req.authSub);
+  if (!row) return res.status(404).json({ error: 'Account not found.' });
+
+  const check = await pin.checkLogin('customer', row.phone, (req.body || {}).pin);
+  if (!check.ok) return res.status(check.status === 429 ? 429 : 401).json({ error: check.error });
+
+  const open = await repo.customers.hasOpenTicket(row.id, row.phone);
+  if (open) {
+    return res.status(409).json({
+      error: `You still have an open service request (${open.id}, ${open.status}). Please wait until it is completed, or contact support.`,
+    });
+  }
+  await repo.customers.deleteWithScrub(row.id, row.phone);
+  invalidate('customer', row.id);
+  await repo.pinAudit.add('self', 'customer', row.id, 'delete');
+  scheduleBroadcast(300);
+  res.json({ ok: true });
+});
+
 // --- Admin PIN tools (dashboard) -------------------------------------------
 const adminRole = (req) => (req.params.kind === 'technicians' ? 'technician' : req.params.kind === 'customers' ? 'customer' : null);
 

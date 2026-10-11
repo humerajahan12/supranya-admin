@@ -258,6 +258,28 @@ const customers = {
   async remove(id) {
     await pool.query('DELETE FROM customers WHERE id = $1', [id]);
   },
+  // Account deletion requested by the customer: blank their personal details
+  // on past (completed) service records so no name/phone remains, then delete
+  // the account (devices and addresses go with it). What stays is the
+  // business record that a service happened: ticket id, service, charger
+  // nickname, coordinates and dates.
+  async deleteWithScrub(id, phone) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `UPDATE jobs SET customer_name = 'Deleted customer', customer_phone = '' WHERE customer_id = $1 OR customer_phone = $2`,
+        [id, phone]
+      );
+      await client.query('DELETE FROM customers WHERE id = $1', [id]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
   async hasOpenTicket(id, phone) {
     const { rows } = await pool.query(
       `SELECT id, status FROM jobs WHERE (customer_id = $1 OR customer_phone = $2) AND status <> 'Completed' LIMIT 1`,
