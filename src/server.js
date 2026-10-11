@@ -10,7 +10,7 @@ const { Server } = require('socket.io');
 
 const repo = require('../db/repo');
 const { startRoute } = require('./simulate');
-const { geocodeSearch, fetchRoadRoute } = require('./routing');
+const { geocodeSearch, fetchRoadRoute, distanceToPathMeters, haversineKm } = require('./routing');
 const payments = require('./payments');
 const { issueToken, invalidate, requireCustomerAuth, requireTechnicianAuth, requireAnyAccount, requireAnyAccountForPinChange } = require('./clientAuth');
 const { requestOtp, verifyOtp } = require('./otp');
@@ -24,12 +24,24 @@ const io = new Server(server);
 // below — jobId -> ms timestamp of the last recompute. Plain in-memory Map
 // is fine here: losing it on a restart just means the next ping recomputes
 // immediately, no real consequence either way.
-const ROUTE_RECOMPUTE_THROTTLE_MS = 25000;
+// Route-once policy: the road route is computed ONCE when a job goes En Route
+// (simulate.js). After that the server only asks the routing service again
+// when the technician has clearly left the planned line (took another road),
+// or when the stored route is just the straight-line fallback because the
+// routing service was down at the time. This cuts outside routing calls from
+// hundreds per job to typically 1-3, which is what keeps a free public
+// routing server viable. Per-job minimum gaps below also stop a technician
+// wandering near the edge of the threshold from triggering a call every ping.
+// In-memory is fine: losing it on a restart only allows one extra recompute.
+const OFF_ROUTE_METERS = 300;
+const REROUTE_MIN_GAP_MS = 30 * 1000;
+const FALLBACK_RETRY_GAP_MS = 120 * 1000;
+const NEAR_DESTINATION_KM = 0.15; // within 150 m: the line no longer matters
 const lastRouteRecomputeAt = new Map();
-function shouldRecomputeRoute(jobId) {
+function allowRecompute(jobId, minGapMs) {
   const now = Date.now();
-  const last = lastRouteRecomputeAt.get(jobId) || 0;
-  if (now - last < ROUTE_RECOMPUTE_THROTTLE_MS) return false;
+  if (now - (lastRouteRecomputeAt.get(jobId) || 0) < minGapMs) return false;
+  if (lastRouteRecomputeAt.size > 1000) lastRouteRecomputeAt.clear();
   lastRouteRecomputeAt.set(jobId, now);
   return true;
 }
@@ -425,7 +437,7 @@ app.patch('/api/customers/:id/devices/:deviceId/location', requireCustomerAuth, 
 // a strict ~1 request/second policy and isn't meant for production volume —
 // the app debounces typing, but swap this for a paid geocoder (e.g. Google
 // Places) at the same time as the OSRM routing swap before launch.
-app.get('/api/customers/:id/geocode', requireCustomerAuth, async (req, res) => {
+app.get('/api/customers/:id/geocode', rateLimit(30), requireCustomerAuth, async (req, res) => {
   if (req.params.id !== req.authSub) {
     return res.status(403).json({ error: 'This login does not belong to this customer account.' });
   }
@@ -709,30 +721,27 @@ app.post('/api/technicians/:id/location', requireTechnicianAuth, async (req, res
     heading: heading != null ? Number(heading) : (technician.heading ?? null),
   });
 
-  // The green route line on the map was computed ONCE, at the moment the
-  // job was assigned, from wherever the technician happened to be then —
-  // it never used to move after that. Now that the dot follows real GPS
-  // instead of walking that fixed line, the two would drift apart (the
-  // dot going wherever the technician actually drives, the line staying
-  // frozen at the original snapshot) unless the line is recomputed here
-  // too. Only ever one such job at a time per technician in practice.
-  //
-  // THROTTLED deliberately: the phone pings every ~8s, but re-fetching a
-  // road route doesn't need to happen that often, and every call here
-  // hits an outside routing service (OSRM's free public demo server right
-  // now — this whole project is flagged to move off that before 100-150
-  // technicians go live, see README). Recomputing at most once every 25s
-  // per job cuts that outside call volume by ~3x for free, and will do
-  // the same for whatever paid routing API replaces OSRM later, so it's
-  // worth keeping regardless of provider.
+  // The green route line is computed once when the job goes En Route
+  // (simulate.js). The dot follows real GPS, so the line is only recomputed
+  // here when the technician has left it (or it is just the straight-line
+  // fallback). See the route-once policy constants near the top of this file.
   const enRouteJob = await repo.jobs.getEnRouteForTechnician(technician.id);
-  if (enRouteJob && shouldRecomputeRoute(enRouteJob.id)) {
-    const roadPath = await fetchRoadRoute(Number(latitude), Number(longitude), enRouteJob.latitude, enRouteJob.longitude);
-    const routePath = roadPath || [
-      [Number(latitude), Number(longitude)],
-      [enRouteJob.latitude, enRouteJob.longitude],
-    ];
-    await repo.jobs.setRoutePathAndEnRoute(enRouteJob.id, routePath);
+  if (enRouteJob) {
+    const lat = Number(latitude);
+    const lng = Number(longitude);
+    const path = enRouteJob.routePath;
+    const isStraightFallback = !path || path.length <= 2; // OSRM was unavailable (or trivially short)
+    const nearDestination = haversineKm(lat, lng, enRouteJob.latitude, enRouteJob.longitude) < NEAR_DESTINATION_KM;
+    const offRoute = !isStraightFallback && distanceToPathMeters(lat, lng, path) > OFF_ROUTE_METERS;
+
+    if (!nearDestination && (isStraightFallback || offRoute) && allowRecompute(enRouteJob.id, isStraightFallback ? FALLBACK_RETRY_GAP_MS : REROUTE_MIN_GAP_MS)) {
+      const roadPath = await fetchRoadRoute(lat, lng, enRouteJob.latitude, enRouteJob.longitude);
+      const routePath = roadPath || [
+        [lat, lng],
+        [enRouteJob.latitude, enRouteJob.longitude],
+      ];
+      await repo.jobs.setRoutePathAndEnRoute(enRouteJob.id, routePath);
+    }
   }
 
   scheduleBroadcast(); // coalesced: dozens of phones pinging must not each trigger a full reload

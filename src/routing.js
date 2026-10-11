@@ -14,7 +14,7 @@ const OSRM_BASE_URL = process.env.OSRM_BASE_URL || 'https://router.project-osrm.
 // traffic. Self-host Nominatim or swap in Google/Mapbox Geocoding for that.
 const NOMINATIM_BASE_URL = process.env.NOMINATIM_BASE_URL || 'https://nominatim.openstreetmap.org';
 
-async function geocodeSearch(query) {
+async function geocodeSearchRaw(query) {
   try {
     // Soft bias toward Hyderabad (viewbox + bounded=0 means "prefer results
     // in this box, don't exclude everything outside it") — without this, a
@@ -65,6 +65,55 @@ async function fetchRoadRoute(startLat, startLng, endLat, endLng) {
   }
 }
 
+// --- Politeness layer for the free public Nominatim server ------------------
+// Its usage policy: max ~1 request/second, no hammering, identify yourself.
+// So every lookup goes through ONE queue spaced >= 1.1s apart, identical
+// queries are answered from a 24h cache (customers searching the same
+// landmark cost nothing), and if the queue backs up we answer "busy" rather
+// than pile on. Swap NOMINATIM_BASE_URL for your own server and this still
+// works; it just becomes unnecessary.
+const GEO_MIN_GAP_MS = 1100;
+const GEO_MAX_QUEUE = 15;
+const GEO_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const GEO_CACHE_MAX = 1000;
+const geoCache = new Map();
+let geoChain = Promise.resolve();
+let geoPending = 0;
+let geoLastAt = 0;
+const geoInFlight = new Map(); // identical simultaneous searches share one lookup
+
+async function geocodeSearch(query) {
+  const key = String(query || '').trim().toLowerCase();
+  if (!key) return [];
+  const hit = geoCache.get(key);
+  if (hit && hit.exp > Date.now()) return hit.data;
+
+  if (geoInFlight.has(key)) return geoInFlight.get(key);
+  if (geoPending >= GEO_MAX_QUEUE) return [];
+  geoPending++;
+  const run = geoChain.then(async () => {
+    const wait = geoLastAt + GEO_MIN_GAP_MS - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    geoLastAt = Date.now();
+    return geocodeSearchRaw(query);
+  });
+  geoChain = run.catch(() => {});
+  const shared = run.then((data) => {
+    if (data.length) {
+      if (geoCache.size >= GEO_CACHE_MAX) geoCache.clear();
+      geoCache.set(key, { data, exp: Date.now() + GEO_CACHE_TTL_MS });
+    }
+    return data;
+  });
+  geoInFlight.set(key, shared);
+  try {
+    return await shared;
+  } finally {
+    geoInFlight.delete(key);
+    geoPending--;
+  }
+}
+
 function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -78,6 +127,30 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 // Compass bearing (0 = north, 90 = east, ...) from point 1 to point 2 —
 // used to rotate the rider marker to actually face the direction of travel,
 // the way Ola/Uber driver icons do, rather than always pointing the same way.
+// Shortest distance in metres from a point to a polyline of [lat, lng]
+// points. Used to decide whether a technician has left the planned route
+// (so we only ask the routing server again when they actually have).
+function distanceToPathMeters(lat, lng, path) {
+  if (!path || path.length === 0) return Infinity;
+  const mPerDegLat = 111320;
+  const mPerDegLng = 111320 * Math.cos((lat * Math.PI) / 180);
+  const px = lng * mPerDegLng;
+  const py = lat * mPerDegLat;
+  let best = Infinity;
+  for (let i = 0; i < path.length - 1; i++) {
+    const ax = path[i][1] * mPerDegLng, ay = path[i][0] * mPerDegLat;
+    const bx = path[i + 1][1] * mPerDegLng, by = path[i + 1][0] * mPerDegLat;
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 === 0 ? 0 : ((px - ax) * dx + (py - ay) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const d = Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+    if (d < best) best = d;
+  }
+  if (path.length === 1) best = Math.hypot(px - path[0][1] * mPerDegLng, py - path[0][0] * mPerDegLat);
+  return best;
+}
+
 function bearingBetween(lat1, lon1, lat2, lon2) {
   const toRad = (d) => (d * Math.PI) / 180;
   const toDeg = (r) => (r * 180) / Math.PI;
@@ -133,4 +206,4 @@ function pointAlongPath(path, progress) {
   };
 }
 
-module.exports = { fetchRoadRoute, bearingBetween, pointAlongPath, haversineKm, geocodeSearch };
+module.exports = { fetchRoadRoute, bearingBetween, pointAlongPath, haversineKm, geocodeSearch, distanceToPathMeters };
