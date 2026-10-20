@@ -16,11 +16,12 @@
 // change both.
 const crypto = require('crypto');
 
-const PLATFORM_FEE = 20;
+// No platform fee: the customer pays exactly the service price.
+const PLATFORM_FEE = 0;
 
 const SERVICES = {
-  'svc-annual': { name: 'Annual Maintenance', price: 899 },
-  'svc-repair': { name: 'Fault Diagnosis & Repair', price: 499 },
+  'svc-annual': { name: 'EV Charger Installation and Commissioning', price: 1700 },
+  'svc-repair': { name: 'Fault Diagnosis & Repair', price: 1200 },
 };
 
 function getRazorpay() {
