@@ -9,6 +9,7 @@ const bcrypt = require('bcryptjs');
 const { Server } = require('socket.io');
 
 const repo = require('../db/repo');
+const db = require('../db');
 const { startRoute } = require('./simulate');
 const { geocodeSearch, fetchRoadRoute, distanceToPathMeters, haversineKm } = require('./routing');
 const payments = require('./payments');
@@ -1466,6 +1467,19 @@ io.on('connection', async (socket) => {
 });
 
 // --- Static admin frontend ---------------------------------------------------
+// Health check for UptimeRobot. Runs one trivial query so the database
+// counts as active (Supabase free pauses idle projects) and the Render
+// instance stays awake. Returns no data and needs no login.
+app.get('/health', async (req, res) => {
+  try {
+    await db.query('SELECT 1');
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Health check failed:', err.message);
+    res.status(503).json({ ok: false });
+  }
+});
+
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 const PORT = process.env.PORT || 4000;
