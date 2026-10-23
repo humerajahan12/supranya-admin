@@ -605,7 +605,7 @@ app.post('/api/payments/verify', requireCustomerAuth, async (req, res) => {
     longitude: Number(longitude),
   });
   await broadcastState();
-  res.status(201).json(ticket);
+  res.status(201).json(forCustomer(ticket));
 });
 
 // Admin-created job (ADMIN-ONLY). Same shape as the public /api/tickets
@@ -660,11 +660,20 @@ app.get('/api/customers/:id', requireCustomerAuth, async (req, res) => {
 // A single ticket by id. Requires a customer login AND that the ticket is
 // theirs — ids are TKT-<timestamp>, trivially guessable, so an open endpoint
 // would expose every customer's name, phone and location.
+// What a customer's app is allowed to see of a job. Technician location is
+// for dispatch only (the privacy policy says so), so the planned route (it is
+// drawn from the technician's position) and internal ops flags are removed
+// before any job is sent to a customer.
+function forCustomer(job) {
+  const { routePath, delayAlerted, ...safe } = job;
+  return safe;
+}
+
 app.get('/api/tickets/:id', requireCustomerAuth, async (req, res) => {
   const job = await repo.jobs.getById(req.params.id);
   if (!job || job.customerId !== req.authSub) return res.status(404).json({ error: 'Ticket not found' });
   const technician = job.technicianId ? await repo.technicians.getById(job.technicianId) : null;
-  res.json({ ...job, technicianName: technician ? technician.name : null });
+  res.json({ ...forCustomer(job), technicianName: technician ? technician.name : null });
 });
 
 app.get('/api/customers/:id/tickets', requireCustomerAuth, async (req, res) => {
@@ -674,7 +683,7 @@ app.get('/api/customers/:id/tickets', requireCustomerAuth, async (req, res) => {
   const customer = await repo.customers.getById(req.params.id);
   if (!customer) return res.status(404).json({ error: 'Customer not found' });
   const techNameById = await technicianNameMap();
-  const withTech = (j) => ({ ...j, technicianName: j.technicianId ? techNameById[j.technicianId] || j.technicianId : null });
+  const withTech = (j) => ({ ...forCustomer(j), technicianName: j.technicianId ? techNameById[j.technicianId] || j.technicianId : null });
 
   // No page param = the full list as a plain array, which is what apps
   // installed before pagination existed still expect. With ?page= it returns
