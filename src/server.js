@@ -528,6 +528,46 @@ app.post('/api/customers/:id/addresses', requireCustomerAuth, async (req, res) =
   res.status(201).json(address);
 });
 
+// Edit / delete one of the customer's own saved addresses.
+app.patch('/api/customers/:id/addresses/:addressId', requireCustomerAuth, async (req, res) => {
+  if (req.params.id !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this customer account.' });
+  }
+  const { label, line, latitude, longitude } = req.body || {};
+  const lat = Number(latitude);
+  const lon = Number(longitude);
+  if (!String(label || '').trim() || !String(line || '').trim() || latitude == null || longitude == null || !Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return res.status(400).json({ error: 'label, line, latitude and longitude are required' });
+  }
+  const r = await db.query(
+    'UPDATE addresses SET label = $1, line = $2, latitude = $3, longitude = $4 WHERE id = $5 AND customer_id = $6',
+    [String(label).trim().slice(0, 60), String(line).trim().slice(0, 300), lat, lon, req.params.addressId, req.params.id]
+  );
+  if (!r.rowCount) return res.status(404).json({ error: 'Address not found' });
+  await broadcastState();
+  res.json({ ok: true });
+});
+
+app.delete('/api/customers/:id/addresses/:addressId', requireCustomerAuth, async (req, res) => {
+  if (req.params.id !== req.authSub) {
+    return res.status(403).json({ error: 'This login does not belong to this customer account.' });
+  }
+  const r = await db.query(
+    'DELETE FROM addresses WHERE id = $1 AND customer_id = $2 RETURNING is_default',
+    [req.params.addressId, req.params.id]
+  );
+  if (!r.rowCount) return res.status(404).json({ error: 'Address not found' });
+  // If the default was removed, promote the oldest remaining address.
+  if (r.rows[0].is_default) {
+    await db.query(
+      'UPDATE addresses SET is_default = true WHERE id = (SELECT id FROM addresses WHERE customer_id = $1 ORDER BY id LIMIT 1)',
+      [req.params.id]
+    );
+  }
+  await broadcastState();
+  res.json({ ok: true });
+});
+
 // --- Ticket creation & customer-facing ticket lookup (PUBLIC — called by
 // the customer's phone). ---------------------------------------------------
 app.post('/api/tickets', requireAuth, async (req, res) => {
