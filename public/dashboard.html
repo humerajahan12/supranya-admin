@@ -1607,7 +1607,18 @@
           <div class="detail-stat"><div class="num">${formatDate(c.registeredAt)}</div><div class="label">Registered</div></div>
         </div>
 
-        ${c.devices.length ? c.devices.map(d => `
+        ${c.devices.length ? c.devices.map(d => customerEditMode ? `
+          <div class="device-card" style="align-items:flex-start;">
+            <div class="device-card-icon">⚡</div>
+            <div style="flex:1;">
+              <label style="font-size:10.5px; color:var(--faint); display:block; margin-bottom:4px;">Charger name</label>
+              <input class="search-input editDevName" data-dev-id="${d.id}" style="margin-bottom:8px;" value="${escAttr(d.name)}" />
+              <label style="font-size:10.5px; color:var(--faint); display:block; margin-bottom:4px;">Brand</label>
+              <input class="search-input editDevBrand" data-dev-id="${d.id}" style="margin-bottom:8px;" value="${escAttr(d.brand)}" />
+              <label style="font-size:10.5px; color:var(--faint); display:block; margin-bottom:4px;">Power rating (e.g. 7.4 kW)</label>
+              <input class="search-input editDevPower" data-dev-id="${d.id}" style="margin-bottom:0;" value="${escAttr(d.power)}" />
+            </div>
+          </div>` : `
           <div class="device-card">
             <div class="device-card-icon">⚡</div>
             <div style="flex:1;">
@@ -1641,22 +1652,61 @@
       setTimeout(() => customerMap.invalidateSize(), 50); // map container's width just changed
     }
 
+    // Escapes a value for use inside a double-quoted HTML attribute.
+    function escAttr(v) {
+      return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
     async function saveCustomerEdit(id) {
       const name = document.getElementById('editCustName').value.trim();
       const phone = document.getElementById('editCustPhone').value.trim();
       if (!name || !phone) { alert('Name and phone cannot be empty'); return; }
-      const res = await fetch(`/api/customers/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, phone }),
-      });
-      if (res.ok) {
-        customerEditMode = false;
-        await loadCustomers();
-      } else {
-        const data = await res.json().catch(() => ({}));
-        alert(data.error || 'Could not save changes');
+      const original = customerPageState.data.find(c => c.id === id);
+
+      // 1. Customer name / phone (only if changed)
+      if (!original || original.name !== name || original.phone !== phone) {
+        const res = await fetch(`/api/customers/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, phone }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          alert(data.error || 'Could not save changes');
+          return;
+        }
       }
+
+      // 2. Charger details (only the devices that changed)
+      const failures = [];
+      for (const d of (original ? original.devices : [])) {
+        const nameEl = document.querySelector(`.editDevName[data-dev-id="${d.id}"]`);
+        const brandEl = document.querySelector(`.editDevBrand[data-dev-id="${d.id}"]`);
+        const powerEl = document.querySelector(`.editDevPower[data-dev-id="${d.id}"]`);
+        if (!nameEl || !brandEl || !powerEl) continue;
+        const devName = nameEl.value.trim();
+        const devBrand = brandEl.value.trim();
+        const devPower = powerEl.value.trim();
+        if (!devName) { failures.push(`${d.name}: charger name cannot be empty`); continue; }
+        if (devName === d.name && devBrand === (d.brand || '') && devPower === (d.power || '')) continue;
+        const res = await fetch(`/api/customers/${id}/devices/${d.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: devName, brand: devBrand, power: devPower }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          failures.push(`${d.name}: ${data.error || 'could not save'}`);
+        }
+      }
+
+      if (failures.length) {
+        alert('Some charger changes were not saved:\n' + failures.join('\n'));
+        await loadCustomers();
+        return; // stay in edit mode so the admin can fix and retry
+      }
+      customerEditMode = false;
+      await loadCustomers();
     }
 
     function closeCustomerDetail() {

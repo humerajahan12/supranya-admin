@@ -424,12 +424,37 @@ app.patch('/api/customers/:id/devices/:deviceId', requireAuth, async (req, res) 
   const device = await repo.devices.getById(req.params.id, req.params.deviceId);
   if (!device) return res.status(404).json({ error: 'Device not found' });
 
-  const { latitude, longitude } = req.body || {};
-  if (latitude == null || longitude == null) {
-    return res.status(400).json({ error: 'latitude and longitude are required' });
+  // Admin corrections: the pinned location and/or the charger's details
+  // (name, brand, power rating), e.g. when the customer mistyped them.
+  const { latitude, longitude, name, brand, power } = req.body || {};
+  const hasLocation = latitude != null || longitude != null;
+  const hasDetails = name !== undefined || brand !== undefined || power !== undefined;
+  if (!hasLocation && !hasDetails) {
+    return res.status(400).json({ error: 'Nothing to update' });
   }
-  const updated = await repo.devices.setLocation(req.params.deviceId, Number(latitude), Number(longitude));
 
+  if (hasLocation) {
+    const lat = Number(latitude);
+    const lon = Number(longitude);
+    if (latitude == null || longitude == null || !Number.isFinite(lat) || !Number.isFinite(lon)) {
+      return res.status(400).json({ error: 'latitude and longitude are required' });
+    }
+    await repo.devices.setLocation(req.params.deviceId, lat, lon);
+  }
+
+  if (hasDetails) {
+    const clean = (v, max) => String(v == null ? '' : v).trim().slice(0, max);
+    const newName = name !== undefined ? clean(name, 80) : device.name;
+    const newBrand = brand !== undefined ? clean(brand, 60) : device.brand;
+    const newPower = power !== undefined ? clean(power, 40) : device.power;
+    if (!newName) return res.status(400).json({ error: 'Charger name cannot be empty' });
+    await db.query(
+      'UPDATE devices SET name = $1, brand = $2, power = $3 WHERE id = $4 AND customer_id = $5',
+      [newName, newBrand, newPower, req.params.deviceId, req.params.id]
+    );
+  }
+
+  const updated = await repo.devices.getById(req.params.id, req.params.deviceId);
   await broadcastState();
   res.json(updated);
 });
