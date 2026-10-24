@@ -10,7 +10,6 @@ const { Server } = require('socket.io');
 
 const repo = require('../db/repo');
 const db = require('../db');
-const { startRoute } = require('./simulate');
 const { geocodeSearch, fetchRoadRoute, distanceToPathMeters, haversineKm } = require('./routing');
 const payments = require('./payments');
 const { issueToken, invalidate, requireCustomerAuth, requireTechnicianAuth, requireAnyAccount, requireAnyAccountForPinChange } = require('./clientAuth');
@@ -1364,7 +1363,10 @@ async function assignJobToTechnician(jobId, technician) {
   await repo.technicians.recomputeStatus(technician.id);
   const updatedTechnician = await repo.technicians.getById(technician.id);
   await broadcastState();
-  startRoute(job, updatedTechnician, broadcastState); // computes the road route for the map line; real position now comes from the technician's own phone
+  // Assigning does NOT start the trip. The job stays "Assigned" until the
+  // technician taps Start in the app (or an admin starts it from the
+  // dashboard). Only an En Route job is tracked, so a technician with several
+  // jobs is never tracked for the ones they have not started.
   return { job, technician: updatedTechnician };
 }
 
@@ -1387,11 +1389,44 @@ async function setJobStatus(job, status) {
   return updated;
 }
 
+// Status changes with the rules in one place.
+//  - Technicians can only move a job forward (Assigned > En Route > Arrived >
+//    Completed).
+//  - Admins can set any of the four, which lets them start a job for a
+//    technician or put one back to Assigned if it was started by mistake.
+//  - A technician can have only ONE job En Route at a time (that is the job
+//    being tracked).
+// Returns { job } on success or { httpStatus, error }.
+const JOB_STATUS_ORDER = ['Assigned', 'En Route', 'Arrived', 'Completed'];
+async function changeJobStatus(job, status, actor) {
+  if (!JOB_STATUS_ORDER.includes(status)) {
+    return { httpStatus: 400, error: 'status must be Assigned, En Route, Arrived, or Completed' };
+  }
+  if (!job.technicianId) {
+    return { httpStatus: 409, error: 'Assign a technician before changing the status.' };
+  }
+  if (actor === 'technician' && JOB_STATUS_ORDER.indexOf(status) <= JOB_STATUS_ORDER.indexOf(job.status)) {
+    return { httpStatus: 409, error: `This job is already ${job.status}.` };
+  }
+  if (status === 'En Route') {
+    const other = await repo.jobs.getEnRouteForTechnician(job.technicianId);
+    if (other && other.id !== job.id) {
+      return { httpStatus: 409, error: `Finish or mark Arrived on ${other.id} first. Only one job can be En Route at a time.` };
+    }
+  }
+  const updated = await setJobStatus(job, status);
+  // Starting a trip: forget any old route throttle so the first GPS ping from
+  // the phone draws the road route straight away.
+  if (status === 'En Route') lastRouteRecomputeAt.delete(job.id);
+  return { job: updated };
+}
+
 app.post('/api/jobs/:id/status', requireAuth, async (req, res) => {
   const job = await repo.jobs.getById(req.params.id);
   if (!job) return res.status(404).json({ error: 'Job not found' });
-  const updated = await setJobStatus(job, req.body.status);
-  res.json({ ok: true, job: updated });
+  const result = await changeJobStatus(job, req.body && req.body.status, 'admin');
+  if (result.error) return res.status(result.httpStatus).json({ error: result.error });
+  res.json({ ok: true, job: result.job });
 });
 
 // Technician-facing status update — public but ownership-checked.
@@ -1405,11 +1440,9 @@ app.post('/api/technicians/:techId/jobs/:jobId/status', requireTechnicianAuth, a
     return res.status(403).json({ error: 'This job is not assigned to this technician' });
   }
   const { status } = req.body || {};
-  if (!['En Route', 'Arrived', 'Completed'].includes(status)) {
-    return res.status(400).json({ error: 'status must be En Route, Arrived, or Completed' });
-  }
-  const updated = await setJobStatus(job, status);
-  res.json({ ok: true, job: updated });
+  const result = await changeJobStatus(job, status, 'technician');
+  if (result.error) return res.status(result.httpStatus).json({ error: result.error });
+  res.json({ ok: true, job: result.job });
 });
 
 app.post('/api/alerts/:id/ack', requireAuth, async (req, res) => {

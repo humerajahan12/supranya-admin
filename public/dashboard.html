@@ -817,16 +817,44 @@
                 <option value="">Choose a technician…</option>
                 ${techOptions}
               </select>
-              ${canAssign
-                ? `<button class="assign-btn" onclick="assign('${job.id}')">Assign</button>`
-                : canTrack
-                  ? `<button class="nav-btn" title="Track live location" onclick="openTrack('${job.id}')">🧭</button>`
-                  : `<button class="assign-btn" disabled>Completed</button>`}
+              ${actionButtons(job, canAssign)}
             </div>
           </div>`;
       }).join('') : '<div class="no-devices">No jobs match your search</div>';
 
       renderPagination('jobPagination', filtered.length, jobPageState.page, JOB_PAGE_SIZE, (p) => { jobPageState.page = p; renderJobs(latestState.jobs, latestState.technicians); });
+    }
+
+    // Buttons beside the technician dropdown, by job status.
+    //  Unassigned: Assign.  Assigned: Start (admin override, sets En Route).
+    //  En Route: Back to Assigned (if started by mistake) + live tracking.
+    //  Arrived: live tracking.  Completed: nothing.
+    function actionButtons(job, canAssign) {
+      if (canAssign) return `<button class="assign-btn" onclick="assign('${job.id}')">Assign</button>`;
+      if (job.status === 'Completed') return `<button class="assign-btn" disabled>Completed</button>`;
+      const small = 'width:auto; padding:9px 12px; white-space:nowrap;';
+      const track = `<button class="nav-btn" title="Track live location" onclick="openTrack('${job.id}')">🧭</button>`;
+      if (job.status === 'Assigned') {
+        return `<button class="assign-btn" style="${small}" title="Start this job for the technician" onclick="adminSetJobStatus('${job.id}','En Route')">Start</button>`;
+      }
+      if (job.status === 'En Route') {
+        return `<button class="assign-btn" style="${small} background:#8a5c0a;" title="Put back to Assigned (stops live tracking)" onclick="adminSetJobStatus('${job.id}','Assigned')">Back to Assigned</button>${track}`;
+      }
+      return track;
+    }
+
+    async function adminSetJobStatus(jobId, status) {
+      const msg = status === 'En Route'
+        ? 'Start this job now? Live tracking will begin on the technician\'s phone.'
+        : 'Put this job back to Assigned? Live tracking for it will stop.';
+      if (!confirm(msg)) return;
+      const res = await fetch(`/api/jobs/${jobId}/status`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'Could not change the status');
+      }
     }
 
     async function assign(jobId) {
